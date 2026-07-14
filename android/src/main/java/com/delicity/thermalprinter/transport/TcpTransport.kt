@@ -24,10 +24,14 @@ class TcpTransport(
     private var out: OutputStream? = null
     private var input: InputStream? = null
 
+    /** Dernier timeout utilisé par [open], réutilisé lors d'une reconnexion interne. */
+    private var lastTimeoutMs: Long = 10_000
+
     override val isOpen: Boolean
         get() = socket?.isConnected == true && socket?.isClosed == false
 
     override fun open(timeoutMs: Long) {
+        lastTimeoutMs = timeoutMs
         if (isOpen) return
         try {
             val s = Socket()
@@ -45,19 +49,35 @@ class TcpTransport(
     }
 
     override fun write(bytes: ByteArray) {
-        val o = out ?: throw PrinterException(ErrorCode.CONNECTION_FAILED, "Socket TCP non ouvert")
         try {
-            // Envoi par chunks pour ménager les petits buffers d'imprimante.
-            var offset = 0
-            val chunk = 4096
-            while (offset < bytes.size) {
-                val len = minOf(chunk, bytes.size - offset)
-                o.write(bytes, offset, len)
-                o.flush()
-                offset += len
+            writeAll(bytes)
+        } catch (first: Exception) {
+            // Le socket est probablement mort côté distant : les Epson TM (et beaucoup
+            // d'imprimantes RAW 9100) n'acceptent qu'UNE connexion et ferment les
+            // connexions inactives. En Java, ni Socket.isConnected() ni isClosed() ne
+            // détectent une fermeture côté pair, donc isOpen ment et aucune reconnexion
+            // amont n'a lieu. On ré-ouvre un socket neuf et on réémet le job une fois
+            // avant d'abandonner.
+            try {
+                close()
+                open(lastTimeoutMs)
+                writeAll(bytes)
+            } catch (retry: Exception) {
+                throw PrinterException(ErrorCode.PRINT_FAILED, "Écriture TCP échouée", retry.message, retryable = true)
             }
-        } catch (e: Exception) {
-            throw PrinterException(ErrorCode.PRINT_FAILED, "Écriture TCP échouée", e.message, retryable = true)
+        }
+    }
+
+    /** Écrit tout [bytes] par chunks pour ménager les petits buffers d'imprimante. */
+    private fun writeAll(bytes: ByteArray) {
+        val o = out ?: throw PrinterException(ErrorCode.CONNECTION_FAILED, "Socket TCP non ouvert")
+        var offset = 0
+        val chunk = 4096
+        while (offset < bytes.size) {
+            val len = minOf(chunk, bytes.size - offset)
+            o.write(bytes, offset, len)
+            o.flush()
+            offset += len
         }
     }
 
