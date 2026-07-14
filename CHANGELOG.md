@@ -4,6 +4,18 @@ Toutes les modifications notables de ce projet sont documentées ici.
 Le format suit [Keep a Changelog](https://keepachangelog.com/) et
 [SemVer](https://semver.org/lang/fr/).
 
+## [8.2.0]
+
+### Corrigé
+- **TCP RAW 9100 : reconnexion automatique à l'écriture.** Les imprimantes Epson TM
+  (ex. TM-T20IV) n'acceptent qu'**une seule** connexion RAW 9100 et ferment les
+  connexions inactives. En Java, ni `Socket.isConnected()` ni `isClosed()` ne détectent
+  une fermeture **côté pair** : `TcpTransport.isOpen` renvoyait `true` sur un socket
+  fantôme, court-circuitant la reconnexion amont (`ensureConnected`) et faisant échouer
+  l'impression avec « Écriture TCP échouée » (le symptôme typique : « Imprimante
+  connectée ! » puis rien à l'impression). `write()` ré-ouvre désormais un socket neuf
+  et réémet le job une fois avant d'abandonner. (Android.)
+
 ## [8.1.0]
 
 ### Ajouté
