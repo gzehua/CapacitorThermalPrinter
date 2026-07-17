@@ -4,6 +4,34 @@ Toutes les modifications notables de ce projet sont documentées ici.
 Le format suit [Keep a Changelog](https://keepachangelog.com/) et
 [SemVer](https://semver.org/lang/fr/).
 
+## [8.2.1]
+
+### Corrigé
+- **Impressions concurrentes : « Décodage impossible » et tickets illisibles.** Le plugin
+  lançait chaque appel Capacitor dans une coroutine/Task indépendante, sans sérialisation :
+  deux jobs simultanés vers la même imprimante (double impression `printReceiptDouble`,
+  retap pendant un envoi lent, timeout JS relâché alors que le natif émettait encore)
+  entrelaçaient leurs octets sur le même socket — l'en-tête raster `GS v 0` désynchronisé
+  faisait imprimer du charabia. En parallèle, `ImageCache` écrivait le téléchargement
+  **directement dans le fichier de cache final** (clé = hash de l'URL) : un second fetch de
+  la même URL tronquait/réécrivait le fichier pendant que le premier job le lisait →
+  `BitmapFactory` renvoyait `null` (« Décodage impossible: \<path\> ») ou décodait un
+  fragment. Corrections :
+  - **Un job d'impression à la fois par imprimante** (mutex par `printerId`, Android + iOS) ;
+    deux imprimantes différentes restent parallèles.
+  - **Cache d'images atomique** : téléchargement vers un fichier temporaire puis rename
+    atomique (Android) / écriture `.atomic` (iOS) + verrou par URL (Android) — une entrée
+    visible est toujours une image complète.
+  - **Validation du contenu avant mise en cache** : bornes décodables + longueur annoncée
+    (`Content-Length`) vérifiées ; une page d'erreur HTTP 200 (portail captif, erreur
+    serveur) ou un flux tronqué silencieusement n'entre plus jamais au cache. Les entrées
+    corrompues héritées d'anciennes versions sont ignorées et re-téléchargées.
+  - **Resynchronisation après échec d'envoi** : un timeout ou une erreur d'écriture en
+    plein job coupe désormais la connexion (le raster incomplet laissé dans le buffer de
+    l'imprimante aurait fait interpréter le job suivant comme des pixels). Le timeout
+    d'envoi est remonté en `PrinterException(TIMEOUT, retryable)` au lieu d'une
+    cancellation générique. (Android.)
+
 ## [8.2.0]
 
 ### Corrigé
