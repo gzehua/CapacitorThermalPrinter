@@ -4,6 +4,21 @@ Toutes les modifications notables de ce projet sont documentées ici.
 Le format suit [Keep a Changelog](https://keepachangelog.com/) et
 [SemVer](https://semver.org/lang/fr/).
 
+## [8.2.2]
+
+### Corrigé
+- **Zebra : détection du langage réel (ZPL/CPCL) au lieu de forcer le ZPL.** Une Zebra en
+  CPCL (mobiles iMZ, ZQ1xx…) ignore un flux ZPL : elle **bipe mais n'imprime rien**, alors
+  que l'écriture Bluetooth réussit et que le job se termine `completed`. Depuis 8.1.0 le
+  plugin forçait systématiquement `device.languages=hybrid_xml_zpl` + `getInstance(ZPL)`,
+  ce qui cassait ces modèles. À la connexion (premier octet sur connexion propre, même
+  contrainte que le fix `line_print` de 8.1.0), le plugin lit désormais `device.languages`
+  via SGD et instancie le `ZebraPrinter` dans le langage natif de l'imprimante :
+  `zpl`/`hybrid` → ZPL (aucune écriture de config) ; `cpcl` → CPCL (on ne touche plus au
+  langage) ; `line_print` → bascule `hybrid_xml_zpl` (comportement 8.1.0) avec repli CPCL
+  si refusée ; pas de réponse → comportement historique. Le langage détecté est tracé dans
+  `getDebugLog()` (catégorie `zebra`). (Android.)
+
 ## [8.2.1]
 
 ### Corrigé
