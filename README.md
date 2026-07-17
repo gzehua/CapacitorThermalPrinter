@@ -199,9 +199,9 @@ module names, and the git-ignored test folder.
 
 ### Tested on real hardware
 
-> ✅ **Verified on real hardware (iOS + Android):** Epson over Bluetooth & network, generic
-> BLE, and generic Bluetooth Classic (Android) all print full tickets end-to-end — logo +
-> styled text + **scannable QR** + cut. See the on-device notes in
+> ✅ **Verified on real hardware (iOS + Android):** Epson over Bluetooth & network, **Star**,
+> generic BLE, and generic Bluetooth Classic (Android) all print full tickets end-to-end —
+> logo + styled text + **scannable QR** + cut. See the on-device notes in
 > [`CONTRIBUTING.md`](CONTRIBUTING.md#verified-on-a-real-iphone-manual-june-2026).
 
 | Target | On-device tested (iOS) | On-device tested (Android) |
@@ -211,7 +211,7 @@ module names, and the git-ignored test folder.
 | **Generic BLE** ESC/POS (e.g. MP210) | ✅ **Tested on iOS** | ✅ **Tested on Android** |
 | **Generic Bluetooth Classic** (SPP) ESC/POS | ⛔ **Blocked on iOS** (no Apple API) | ✅ **Tested on Android** |
 | Network ESC/POS (Wi-Fi / Bonjour / TCP 9100) | ✅ **Tested on iOS** | ✅ **Tested on Android** |
-| **Star** | ⏳ planned | ⏳ planned |
+| **Star** (StarXpand SDK) | ✅ **Tested on iOS** | ✅ **Tested on Android** |
 | **Brother** | ⏳ planned | ⏳ planned |
 | **Zebra** | ⏳ planned | ⏳ planned |
 
