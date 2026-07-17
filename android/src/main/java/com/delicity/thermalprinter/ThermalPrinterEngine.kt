@@ -32,9 +32,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 
 /**
@@ -82,6 +85,17 @@ class ThermalPrinterEngine(private val context: Context) {
     /** Scope + registre des moniteurs de statut actifs (Phase 6). */
     private val monitorScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val monitors = ConcurrentHashMap<String, Job>()
+
+    /**
+     * Verrous d'impression par imprimante. Le plugin lance chaque appel Capacitor dans
+     * une coroutine indépendante : sans sérialisation, deux jobs simultanés vers la même
+     * imprimante (double impression, retap pendant un envoi lent) entrelacent leurs
+     * octets sur le même socket -> l'en-tête raster GS v 0 est désynchronisé et
+     * l'imprimante sort du charabia. Un job à la fois PAR imprimante ; deux imprimantes
+     * différentes restent parallèles.
+     */
+    private val printLocks = ConcurrentHashMap<String, Mutex>()
+    private fun printLock(printerId: String): Mutex = printLocks.getOrPut(printerId) { Mutex() }
 
     private companion object {
         const val RECONNECT_ATTEMPTS = 3
@@ -255,34 +269,47 @@ class ThermalPrinterEngine(private val context: Context) {
             ?: throw failJob(jobId, profile.id, PrinterException(ErrorCode.UNSUPPORTED_PRINTER, "Adapter introuvable"))
 
         try {
-            // 2/3. Connexion ou reconnexion auto.
-            if (!adapter.isConnected(profile.id)) {
-                if (!req.autoReconnect) throw PrinterException(ErrorCode.CONNECTION_FAILED, "Imprimante non connectée")
-                ensureConnected(profile, req.timeoutMs)
+            // Un seul job à la fois par imprimante (cf. printLocks).
+            printLock(profile.id).withLock {
+                // 2/3. Connexion ou reconnexion auto.
+                if (!adapter.isConnected(profile.id)) {
+                    if (!req.autoReconnect) throw PrinterException(ErrorCode.CONNECTION_FAILED, "Imprimante non connectée")
+                    ensureConnected(profile, req.timeoutMs)
+                }
+
+                // Pré-contrôle statut -> HOLD si problème connu (papier/capot).
+                preflightHold(adapter, profile, jobId)
+
+                // 4. Charger l'image.
+                val bitmap = loadImage(req)
+                val render = resolveRenderOptions(profile, req.render)
+                // 5/6. Resize (sauf si désactivé).
+                val resized = if (render.resize) ImageProcessor.resizeToWidth(bitmap, render.widthDots) else bitmap
+                if (render.resize && bitmap != resized) bitmap.recycle()
+
+                emitJob(jobId, profile.id, "printing", progress = 0.1)
+                val bytes = try {
+                    withTimeout(req.timeoutMs) { adapter.printBitmap(profile, resized, render) }
+                } catch (e: TimeoutCancellationException) {
+                    // Envoi interrompu potentiellement en plein raster : l'imprimante attend
+                    // encore des octets de bitmap et consommerait le job SUIVANT comme des
+                    // pixels (charabia). On coupe la connexion pour resynchroniser son parseur.
+                    runCatching { adapter.disconnect(profile.id) }
+                    throw PrinterException(ErrorCode.TIMEOUT, "Envoi impression expiré (${req.timeoutMs} ms)", retryable = true)
+                } catch (e: PrinterException) {
+                    // Échec d'écriture en plein job : même risque de raster incomplet.
+                    runCatching { adapter.disconnect(profile.id) }
+                    throw e
+                } finally {
+                    resized.recycle()
+                }
+
+                val status = runCatching { adapter.getStatus(profile) }.getOrNull()
+                val duration = System.currentTimeMillis() - started
+                emitJob(jobId, profile.id, "completed", progress = 1.0)
+                Logger.log("print", "done", mapOf("id" to profile.id, "bytes" to bytes, "ms" to duration))
+                return PrintOutcome(profile.id, profile.adapter, jobId, "completed", bytes, duration, status)
             }
-
-            // Pré-contrôle statut -> HOLD si problème connu (papier/capot).
-            preflightHold(adapter, profile, jobId)
-
-            // 4. Charger l'image.
-            val bitmap = loadImage(req)
-            val render = resolveRenderOptions(profile, req.render)
-            // 5/6. Resize (sauf si désactivé).
-            val resized = if (render.resize) ImageProcessor.resizeToWidth(bitmap, render.widthDots) else bitmap
-            if (render.resize && bitmap != resized) bitmap.recycle()
-
-            emitJob(jobId, profile.id, "printing", progress = 0.1)
-            val bytes = try {
-                withTimeout(req.timeoutMs) { adapter.printBitmap(profile, resized, render) }
-            } finally {
-                resized.recycle()
-            }
-
-            val status = runCatching { adapter.getStatus(profile) }.getOrNull()
-            val duration = System.currentTimeMillis() - started
-            emitJob(jobId, profile.id, "completed", progress = 1.0)
-            Logger.log("print", "done", mapOf("id" to profile.id, "bytes" to bytes, "ms" to duration))
-            return PrintOutcome(profile.id, profile.adapter, jobId, "completed", bytes, duration, status)
         } catch (e: PrinterException) {
             throw failJob(jobId, profile.id, e)
         }
@@ -305,33 +332,46 @@ class ThermalPrinterEngine(private val context: Context) {
             ?: throw failJob(jobId, profile.id, PrinterException(ErrorCode.UNSUPPORTED_PRINTER, "Adapter introuvable"))
 
         try {
-            if (!adapter.isConnected(profile.id)) {
-                if (!req.autoReconnect) throw PrinterException(ErrorCode.CONNECTION_FAILED, "Imprimante non connectée")
-                ensureConnected(profile, req.timeoutMs)
-            }
-            preflightHold(adapter, profile, jobId)
-
-            emitJob(jobId, profile.id, "printing", progress = 0.1)
-            val bytes = withTimeout(req.timeoutMs) {
-                if (adapter.supportsTextItems()) {
-                    adapter.printItems(profile, req.items, req.defaultCodePage, req.cut, req.feedLines)
-                } else {
-                    // Repli : rendre les items en image puis imprimer via le SDK image (Brother/Zebra).
-                    val width = profile.capabilities.printableDots.takeIf { it > 0 } ?: 576
-                    val bmp = TextRasterizer.render(req.items, width)
-                    val render = RenderOptions(widthDots = width, resize = false, cut = req.cut, feedLines = req.feedLines)
-                    try {
-                        adapter.printBitmap(profile, bmp, render)
-                    } finally {
-                        bmp.recycle()
-                    }
+            // Un seul job à la fois par imprimante (cf. printLocks).
+            printLock(profile.id).withLock {
+                if (!adapter.isConnected(profile.id)) {
+                    if (!req.autoReconnect) throw PrinterException(ErrorCode.CONNECTION_FAILED, "Imprimante non connectée")
+                    ensureConnected(profile, req.timeoutMs)
                 }
+                preflightHold(adapter, profile, jobId)
+
+                emitJob(jobId, profile.id, "printing", progress = 0.1)
+                val bytes = try {
+                    withTimeout(req.timeoutMs) {
+                        if (adapter.supportsTextItems()) {
+                            adapter.printItems(profile, req.items, req.defaultCodePage, req.cut, req.feedLines)
+                        } else {
+                            // Repli : rendre les items en image puis imprimer via le SDK image (Brother/Zebra).
+                            val width = profile.capabilities.printableDots.takeIf { it > 0 } ?: 576
+                            val bmp = TextRasterizer.render(req.items, width)
+                            val render = RenderOptions(widthDots = width, resize = false, cut = req.cut, feedLines = req.feedLines)
+                            try {
+                                adapter.printBitmap(profile, bmp, render)
+                            } finally {
+                                bmp.recycle()
+                            }
+                        }
+                    }
+                } catch (e: TimeoutCancellationException) {
+                    // Job potentiellement tronqué en plein envoi : on coupe la connexion pour
+                    // resynchroniser le parseur de l'imprimante (cf. printImage).
+                    runCatching { adapter.disconnect(profile.id) }
+                    throw PrinterException(ErrorCode.TIMEOUT, "Envoi impression expiré (${req.timeoutMs} ms)", retryable = true)
+                } catch (e: PrinterException) {
+                    runCatching { adapter.disconnect(profile.id) }
+                    throw e
+                }
+                val status = runCatching { adapter.getStatus(profile) }.getOrNull()
+                val duration = System.currentTimeMillis() - started
+                emitJob(jobId, profile.id, "completed", progress = 1.0)
+                Logger.log("print", "text done", mapOf("id" to profile.id, "items" to req.items.size, "bytes" to bytes))
+                return PrintOutcome(profile.id, profile.adapter, jobId, "completed", bytes, duration, status)
             }
-            val status = runCatching { adapter.getStatus(profile) }.getOrNull()
-            val duration = System.currentTimeMillis() - started
-            emitJob(jobId, profile.id, "completed", progress = 1.0)
-            Logger.log("print", "text done", mapOf("id" to profile.id, "items" to req.items.size, "bytes" to bytes))
-            return PrintOutcome(profile.id, profile.adapter, jobId, "completed", bytes, duration, status)
         } catch (e: PrinterException) {
             throw failJob(jobId, profile.id, e)
         }

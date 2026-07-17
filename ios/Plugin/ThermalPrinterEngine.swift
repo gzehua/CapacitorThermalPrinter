@@ -26,6 +26,26 @@ final class ThermalPrinterEngine {
     private var monitors: [String: Task<Void, Never>] = [:]
     private let monitorLock = NSLock()
 
+    /// Sérialisation des jobs d'impression par imprimante (miroir de printLocks côté
+    /// Android) : chaque appel Capacitor part dans une Task indépendante ; sans file,
+    /// deux jobs simultanés vers la même imprimante entrelaceraient leurs octets sur le
+    /// même canal (raster désynchronisé -> impression illisible). Un job à la fois PAR
+    /// imprimante ; deux imprimantes différentes restent parallèles.
+    private var printTails: [String: Task<Void, Never>] = [:]
+    private let printTailLock = NSLock()
+
+    private func withPrintLock<T>(_ printerId: String, _ op: @escaping () async throws -> T) async throws -> T {
+        printTailLock.lock()
+        let previous = printTails[printerId]
+        let task = Task { () throws -> T in
+            await previous?.value // attend la fin du job précédent (succès OU échec)
+            return try await op()
+        }
+        printTails[printerId] = Task { _ = try? await task.value }
+        printTailLock.unlock()
+        return try await task.value
+    }
+
     private func emitJob(_ jobId: String, _ printerId: String, _ state: String,
                          holdReason: String? = nil, progress: Double? = nil,
                          errorCode: ErrorCode? = nil, message: String? = nil) {
@@ -170,22 +190,25 @@ final class ThermalPrinterEngine {
             emitJob(jobId, profile.id, "failed", errorCode: e.code, message: e.message); throw e
         }
         do {
-            if !adapter.isConnected(profile.id) {
-                guard req.autoReconnect else { throw PrinterError(.CONNECTION_FAILED, "Imprimante non connectée") }
-                try await ensureConnected(profile, timeoutMs: req.timeoutMs)
+            // Un seul job à la fois par imprimante (cf. printTails).
+            return try await withPrintLock(profile.id) { [self] in
+                if !adapter.isConnected(profile.id) {
+                    guard req.autoReconnect else { throw PrinterError(.CONNECTION_FAILED, "Imprimante non connectée") }
+                    try await ensureConnected(profile, timeoutMs: req.timeoutMs)
+                }
+                try await preflightHold(adapter, profile, jobId)
+
+                let image = try await loadImage(req)
+                let render = resolveRenderOptions(profile, req.render)
+                let resized = render.resize ? try ImageProcessor.resizeToWidth(image, targetWidth: render.widthDots) : image
+
+                emitJob(jobId, profile.id, "printing", progress: 0.1)
+                let bytes = try await adapter.printImage(profile, image: resized, options: render)
+                let status = try? await adapter.getStatus(profile)
+                let duration = Int(Date().timeIntervalSince(started) * 1000)
+                emitJob(jobId, profile.id, "completed", progress: 1.0)
+                return PrintOutcome(printerId: profile.id, adapter: profile.adapter, jobId: jobId, state: "completed", bytesSent: bytes, durationMs: duration, status: status)
             }
-            try await preflightHold(adapter, profile, jobId)
-
-            let image = try await loadImage(req)
-            let render = resolveRenderOptions(profile, req.render)
-            let resized = render.resize ? try ImageProcessor.resizeToWidth(image, targetWidth: render.widthDots) : image
-
-            emitJob(jobId, profile.id, "printing", progress: 0.1)
-            let bytes = try await adapter.printImage(profile, image: resized, options: render)
-            let status = try? await adapter.getStatus(profile)
-            let duration = Int(Date().timeIntervalSince(started) * 1000)
-            emitJob(jobId, profile.id, "completed", progress: 1.0)
-            return PrintOutcome(printerId: profile.id, adapter: profile.adapter, jobId: jobId, state: "completed", bytesSent: bytes, durationMs: duration, status: status)
         } catch let e as PrinterError {
             emitJob(jobId, profile.id, "failed", errorCode: e.code, message: e.message); throw e
         }
@@ -206,30 +229,33 @@ final class ThermalPrinterEngine {
             emitJob(jobId, profile.id, "failed", errorCode: e.code, message: e.message); throw e
         }
         do {
-            if !adapter.isConnected(profile.id) {
-                guard req.autoReconnect else { throw PrinterError(.CONNECTION_FAILED, "Imprimante non connectée") }
-                try await ensureConnected(profile, timeoutMs: req.timeoutMs)
-            }
-            try await preflightHold(adapter, profile, jobId)
+            // Un seul job à la fois par imprimante (cf. printTails).
+            return try await withPrintLock(profile.id) { [self] in
+                if !adapter.isConnected(profile.id) {
+                    guard req.autoReconnect else { throw PrinterError(.CONNECTION_FAILED, "Imprimante non connectée") }
+                    try await ensureConnected(profile, timeoutMs: req.timeoutMs)
+                }
+                try await preflightHold(adapter, profile, jobId)
 
-            emitJob(jobId, profile.id, "printing", progress: 0.1)
-            let bytes: Int
-            if adapter.supportsTextItems() {
-                bytes = try await adapter.printItems(profile, items: req.items, defaultCodePage: req.defaultCodePage, cut: req.cut, feedLines: req.feedLines)
-            } else {
-                // Repli : rendre les items en image puis imprimer via le SDK image (Brother/Zebra).
-                let width = profile.capabilities.printableDots > 0 ? profile.capabilities.printableDots : 576
-                let image = TextRasterizer.render(req.items, widthDots: width)
-                var render = RenderOptions(widthDots: width)
-                render.resize = false
-                render.cut = req.cut
-                render.feedLines = req.feedLines
-                bytes = try await adapter.printImage(profile, image: image, options: render)
+                emitJob(jobId, profile.id, "printing", progress: 0.1)
+                let bytes: Int
+                if adapter.supportsTextItems() {
+                    bytes = try await adapter.printItems(profile, items: req.items, defaultCodePage: req.defaultCodePage, cut: req.cut, feedLines: req.feedLines)
+                } else {
+                    // Repli : rendre les items en image puis imprimer via le SDK image (Brother/Zebra).
+                    let width = profile.capabilities.printableDots > 0 ? profile.capabilities.printableDots : 576
+                    let image = TextRasterizer.render(req.items, widthDots: width)
+                    var render = RenderOptions(widthDots: width)
+                    render.resize = false
+                    render.cut = req.cut
+                    render.feedLines = req.feedLines
+                    bytes = try await adapter.printImage(profile, image: image, options: render)
+                }
+                let status = try? await adapter.getStatus(profile)
+                let duration = Int(Date().timeIntervalSince(started) * 1000)
+                emitJob(jobId, profile.id, "completed", progress: 1.0)
+                return PrintOutcome(printerId: profile.id, adapter: profile.adapter, jobId: jobId, state: "completed", bytesSent: bytes, durationMs: duration, status: status)
             }
-            let status = try? await adapter.getStatus(profile)
-            let duration = Int(Date().timeIntervalSince(started) * 1000)
-            emitJob(jobId, profile.id, "completed", progress: 1.0)
-            return PrintOutcome(printerId: profile.id, adapter: profile.adapter, jobId: jobId, state: "completed", bytesSent: bytes, durationMs: duration, status: status)
         } catch let e as PrinterError {
             emitJob(jobId, profile.id, "failed", errorCode: e.code, message: e.message); throw e
         }

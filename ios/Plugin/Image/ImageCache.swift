@@ -1,8 +1,12 @@
 import Foundation
 import CryptoKit
+import UIKit
 
 /// Cache local des images à imprimer (miroir de ImageCache.kt).
 /// Emplacement : caches/thermal-images/, clé = SHA-256(url), quota 32 Mo.
+/// Intégrité : contenu validé (décodable en image) avant écriture, écriture atomique —
+/// une entrée visible est toujours une image complète (jamais de fichier partiel ou de
+/// page d'erreur HTTP 200 servie comme image).
 final class ImageCache {
 
     private let dir: URL
@@ -32,7 +36,13 @@ final class ImageCache {
             if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
                 throw PrinterError(.IMAGE_INVALID, "HTTP \(http.statusCode) pour \(urlString)")
             }
-            try data.write(to: dest)
+            // Contenu non-image renvoyé en 200 (portail captif, page d'erreur serveur) :
+            // ne doit jamais entrer au cache (sinon décodage impossible à l'impression).
+            guard UIImage(data: data) != nil else {
+                throw PrinterError(.IMAGE_INVALID, "Contenu non décodable téléchargé: \(urlString)", retryable: true)
+            }
+            // .atomic : un fetch concurrent de la même URL ne peut pas exposer un fichier partiel.
+            try data.write(to: dest, options: .atomic)
             Logger.shared.log("image", "downloaded", ["url": urlString, "bytes": data.count])
             enforceQuota()
             return dest.path
