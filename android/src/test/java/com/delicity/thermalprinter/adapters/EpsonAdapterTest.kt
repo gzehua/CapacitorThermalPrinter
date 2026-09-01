@@ -110,13 +110,50 @@ class EpsonAdapterTest {
     }
 
     @Test
-    fun `discover remonte une imprimante via Discovery`() = runTest {
+    fun `discover remonte les imprimantes avec leur IP reelle en adresse`() = runTest {
         val adapter = EpsonAdapter(ctx)
         val found = mutableListOf<com.delicity.thermalprinter.model.DiscoveredPrinter>()
         adapter.discover(50) { found.add(it) }
-        assertEquals(1, found.size)
-        assertEquals(AdapterId.EPSON, found[0].adapter)
-        assertEquals("TCP:192.168.1.50", found[0].address)
+        assertEquals(3, found.size)
+        assertTrue(found.all { it.adapter == AdapterId.EPSON })
+        // Firmware classique : adresse = IP (dédoublonnable avec le scan TCP natif),
+        // id inchangé par rapport à l'ancien schéma "epson:<target>".
+        assertEquals("192.168.1.50", found[0].address)
+        assertEquals("epson:TCP:192.168.1.50", found[0].id)
+        // Firmware TLS (target TCPS basé MAC) : l'IP prime sur le target brut.
+        assertEquals("192.168.1.60", found[1].address)
+        assertEquals("epson:TCP:192.168.1.60", found[1].id)
+        // Pas d'IP exposée : on retombe sur le target brut (ancien comportement).
+        assertEquals("TCP:192.168.1.70", found[2].address)
+        assertEquals("epson:TCP:192.168.1.70", found[2].id)
+    }
+
+    @Test
+    fun `connect reecrit un target TCPS en TCP (TLS non provisionne)`() = runTest {
+        val adapter = EpsonAdapter(ctx)
+        val p = profile().copy(
+            id = "epson:TCPS:4C:D5:77:51:E3:B1",
+            address = "TCPS:4C:D5:77:51:E3:B1",
+        )
+        adapter.connect(p, 1000)
+        assertTrue(adapter.isConnected(p.id))
+        val printer = Printer.instances.last()
+        assertTrue(
+            "connexion TCPS non réécrite: ${printer.calls}",
+            printer.calls.any { it.startsWith("connect:TCP:4C:D5:77:51:E3:B1") },
+        )
+    }
+
+    @Test
+    fun `connect construit un target TCP depuis une adresse IP nue`() = runTest {
+        val adapter = EpsonAdapter(ctx)
+        val p = profile().copy(id = "epson:TCP:192.168.1.60", address = "192.168.1.60")
+        adapter.connect(p, 1000)
+        val printer = Printer.instances.last()
+        assertTrue(
+            "target TCP:<ip> attendu: ${printer.calls}",
+            printer.calls.any { it.startsWith("connect:TCP:192.168.1.60") },
+        )
     }
 
     @Test

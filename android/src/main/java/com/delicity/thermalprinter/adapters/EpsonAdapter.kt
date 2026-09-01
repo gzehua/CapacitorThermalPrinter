@@ -56,15 +56,25 @@ class EpsonAdapter(private val context: Context) : PrinterAdapter {
                         target.startsWith("USB:") -> Transport.USB
                         else -> Transport.WIFI
                     }
+                    // Cibles réseau : le target peut être "TCP(S):<MAC>" (firmwares TLS) — illisible
+                    // pour l'utilisateur et impossible à dédoublonner avec le scan TCP natif (qui
+                    // remonte des IP). DeviceInfo.getIpAddress fournit l'IP réelle : on l'utilise
+                    // comme adresse (affichage + fusion des doublons) et comme base de l'id, qui
+                    // reste identique à l'ancien schéma pour les targets "TCP:<ip>" classiques.
+                    val ip = if (transport == Transport.WIFI) {
+                        (SdkReflect.callOrNull(info, "getIpAddress") as? String)?.trim().orEmpty()
+                    } else {
+                        ""
+                    }
                     onFound(
                         DiscoveredPrinter(
-                            id = "epson:$target",
+                            id = if (ip.isNotEmpty()) "epson:TCP:$ip" else "epson:$target",
                             name = name,
                             brand = "Epson",
                             model = name,
                             transport = transport,
                             adapter = AdapterId.EPSON,
-                            address = target,
+                            address = ip.ifEmpty { target },
                             discoveredBy = mutableSetOf(AdapterId.EPSON),
                         ),
                     )
@@ -329,9 +339,15 @@ class EpsonAdapter(private val context: Context) : PrinterAdapter {
 
     /** Cible ePOS2 selon le transport ("TCP:ip" / "BT:mac" / "USB:..."). */
     private fun targetFor(profile: PrinterProfile): String {
-        if (profile.address.contains(":") &&
-            (profile.address.startsWith("TCP:") || profile.address.startsWith("BT:") || profile.address.startsWith("USB:"))
-        ) {
+        // Target SSL "TCPS:" (renvoyé par la découverte quand le firmware active TLS) :
+        // la connexion TCPS exige un certificat provisionné sur l'imprimante — hors de
+        // notre périmètre. On se replie sur le canal TCP standard (le suffixe, IP ou MAC,
+        // est un target "TCP:" valide pour le SDK). Sans ça, l'ancien fallback fabriquait
+        // "TCP:TCPS" (coupé au premier ':') → connexion toujours en échec.
+        if (profile.address.startsWith("TCPS:")) {
+            return "TCP:${profile.address.removePrefix("TCPS:")}"
+        }
+        if (profile.address.startsWith("TCP:") || profile.address.startsWith("BT:") || profile.address.startsWith("USB:")) {
             return profile.address
         }
         return when (profile.transport) {

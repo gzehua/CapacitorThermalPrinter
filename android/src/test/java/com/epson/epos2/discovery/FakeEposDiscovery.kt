@@ -13,7 +13,12 @@ object Discovery {
     @JvmStatic
     fun start(context: Context, filter: FilterOption, listener: DiscoveryListener) {
         started = true
-        listener.onDiscovery(DeviceInfo("TCP:192.168.1.50", "TM-m30"))
+        // Firmware classique : target TCP + IP renseignée.
+        listener.onDiscovery(DeviceInfo("TCP:192.168.1.50", "TM-m30", "192.168.1.50"))
+        // Firmware TLS (ex. TM-m30II-NT) : target TCPS basé MAC + IP renseignée.
+        listener.onDiscovery(DeviceInfo("TCPS:4C:D5:77:51:E3:B1", "TM-m30II-NT", "192.168.1.60"))
+        // SDK ancien / cas dégradé : pas d'IP exposée.
+        listener.onDiscovery(DeviceInfo("TCP:192.168.1.70", "TM-T88", null))
     }
 
     @JvmStatic
@@ -29,7 +34,8 @@ interface DiscoveryListener {
     fun onDiscovery(deviceInfo: DeviceInfo)
 }
 
-class DeviceInfo(private val target: String, private val name: String) {
+class DeviceInfo(private val target: String, private val name: String, private val ipAddress: String? = null) {
     fun getTarget(): String = target
     fun getDeviceName(): String = name
+    fun getIpAddress(): String? = ipAddress
 }

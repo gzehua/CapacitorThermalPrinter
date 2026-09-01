@@ -62,7 +62,14 @@ final class DiscoveryManager {
         var byId: [String: DiscoveredPrinter] = [:]
         for p in incoming {
             if let existing = byId[p.id] {
-                var winner = AdapterPriority.score(p) > AdapterPriority.score(existing) ? p : existing
+                // À score d'adapter égal, départager par le service Bonjour : une entrée
+                // `_pdl-datastream` (RAW 9100) doit gagner sur `_printer`/`_ipp` (LPD/IPP),
+                // sinon l'ESC/POS brut part sur le mauvais port → ticket en charabia.
+                let sp = AdapterPriority.score(p)
+                let se = AdapterPriority.score(existing)
+                var winner = sp != se
+                    ? (sp > se ? p : existing)
+                    : (BonjourScanner.addressRank(p.address) < BonjourScanner.addressRank(existing.address) ? p : existing)
                 winner.discoveredBy = existing.discoveredBy.union(p.discoveredBy)
                 winner.lastSeenAt = max(existing.lastSeenAt, p.lastSeenAt)
                 winner.isConnected = existing.isConnected || p.isConnected

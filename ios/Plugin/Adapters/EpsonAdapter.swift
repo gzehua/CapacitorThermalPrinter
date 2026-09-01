@@ -123,6 +123,12 @@ final class EpsonAdapter: PrinterAdapter {
 
     #if canImport(libepos2)
     private static func target(for profile: PrinterProfile) -> String {
+        // Target SSL "TCPS:" (firmwares TLS) : la connexion TCPS exige un certificat
+        // provisionné — on se replie sur le canal TCP standard. Sans ça, le fallback
+        // fabriquait "TCP:TCPS" (coupé au premier ':') → connexion toujours en échec.
+        if profile.address.hasPrefix("TCPS:") {
+            return "TCP:" + profile.address.dropFirst("TCPS:".count)
+        }
         if profile.address.hasPrefix("TCP:") || profile.address.hasPrefix("BT:")
             || profile.address.hasPrefix("BLE:") || profile.address.hasPrefix("USB:") {
             return profile.address
@@ -168,13 +174,18 @@ private final class EpsonDiscoveryDelegate: NSObject, Epos2DiscoveryDelegate {
         else if target.hasPrefix("USB:") { transport = .usb }
         else { transport = .wifi }
         let name = info.deviceName ?? ""
+        // Cibles réseau : le target peut être "TCP(S):<MAC>" (firmwares TLS) — illisible
+        // pour l'utilisateur et impossible à dédoublonner avec la découverte Bonjour.
+        // DeviceInfo.ipAddress fournit l'IP réelle : on l'utilise comme adresse et comme
+        // base de l'id (identique à l'ancien schéma pour les targets "TCP:<ip>" classiques).
+        let ip = transport == .wifi ? (info.ipAddress ?? "").trimmingCharacters(in: .whitespaces) : ""
         onFound(DiscoveredPrinter(
-            id: "epson:\(target)",
+            id: ip.isEmpty ? "epson:\(target)" : "epson:TCP:\(ip)",
             name: name.isEmpty ? "Epson" : name,
             brand: "Epson",
             transport: transport,
             adapter: .epson,
-            address: target,
+            address: ip.isEmpty ? target : ip,
             discoveredBy: ["epson"]))
     }
 }

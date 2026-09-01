@@ -33,8 +33,17 @@ final class TcpTransport {
         if address.hasPrefix("bonjour:") {
             let parts = address.dropFirst("bonjour:".count).components(separatedBy: "\u{1}")
             if parts.count == 3 {
-                let ep = NWEndpoint.service(name: parts[0], type: parts[1], domain: parts[2], interface: nil)
-                return TcpTransport(endpoint: ep, label: "\(parts[0]) (\(parts[1]))")
+                // Ce transport n'écrit QUE de l'ESC/POS brut : seule la variante RAW 9100
+                // (`_pdl-datastream._tcp`) du service est utilisable. Un profil persisté par
+                // une ancienne version peut pointer `_printer._tcp` (LPD 515) ou `_ipp._tcp`
+                // (IPP 631) : y écrire fait imprimer le payload raster en texte (charabia).
+                // On force donc le type RAW ; si l'imprimante ne le publie pas, la connexion
+                // échoue par un timeout clair au lieu d'imprimer n'importe quoi.
+                let type = (parts[1].hasPrefix("_printer.") || parts[1].hasPrefix("_ipp."))
+                    ? "_pdl-datastream._tcp"
+                    : parts[1]
+                let ep = NWEndpoint.service(name: parts[0], type: type, domain: parts[2], interface: nil)
+                return TcpTransport(endpoint: ep, label: "\(parts[0]) (\(type))")
             }
         }
         let (host, port) = splitHostPort(address, defaultPort: defaultPort)

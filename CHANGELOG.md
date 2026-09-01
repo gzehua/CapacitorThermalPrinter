@@ -4,6 +4,38 @@ Toutes les modifications notables de ce projet sont documentées ici.
 Le format suit [Keep a Changelog](https://keepachangelog.com/) et
 [SemVer](https://semver.org/lang/fr/).
 
+## [8.3.0]
+
+### Corrigé
+- **Epson réseau : doublons dans la liste + « Connexion Epson échouée » sur les firmwares
+  TLS (target `TCPS:<MAC>`).** La découverte ePOS2 remontait le `target` brut comme
+  adresse de l'imprimante, avec deux conséquences :
+  1. sur les firmwares avec TLS activé (TM-m30II-NT, TM-m30III…), le target est
+     `TCPS:<MAC>` : le fallback de connexion ne reconnaissait pas ce préfixe et coupait
+     au premier `:` → cible `TCP:TCPS` invalide → échec systématique de la connexion via
+     le SDK Epson ;
+  2. une adresse MAC n'est pas rapprochable des IP du scan réseau natif → chaque
+     imprimante apparaissait **deux fois** (« Epson · Réseau » sans IP + « Natif
+     Réseau » avec IP), 4 lignes pour 2 imprimantes.
+  La découverte utilise désormais `DeviceInfo.getIpAddress()` comme adresse : affichage
+  d'une IP lisible, fusion automatique avec l'entrée du scan natif (une seule ligne par
+  imprimante), et cible de connexion `TCP:<ip>` fiable. Un target `TCPS:` persisté par
+  une ancienne version est réécrit en `TCP:` à la connexion (le canal TLS d'Epson exige
+  un certificat provisionné sur l'imprimante, hors périmètre). L'id des imprimantes aux
+  targets `TCP:<ip>` classiques est inchangé (pas de ré-appairage du parc existant).
+  (Android + iOS.)
+- **iOS : ticket imprimé en charabia quand le service Bonjour LPD/IPP était retenu.** Une
+  imprimante réseau publie souvent trois services mDNS sous le même nom :
+  `_pdl-datastream._tcp` (RAW 9100), `_printer._tcp` (LPD 515) et `_ipp._tcp` (IPP 631).
+  La fusion des découvertes gardait la **première** entrée arrivée — ordre mDNS non
+  déterministe : quand LPD ou IPP gagnait, le flux ESC/POS brut partait sur le mauvais
+  port et l'imprimante imprimait le payload raster en texte (symboles aléatoires).
+  Corrections : classement déterministe des services (`_pdl-datastream` prioritaire) à la
+  découverte ET à la fusion, et réécriture à la connexion des adresses Bonjour
+  `_printer`/`_ipp` (profils persistés par une ancienne version) vers
+  `_pdl-datastream._tcp` — si l'imprimante ne publie pas le service RAW, la connexion
+  échoue par un timeout explicite au lieu d'imprimer n'importe quoi.
+
 ## [8.2.2]
 
 ### Corrigé
