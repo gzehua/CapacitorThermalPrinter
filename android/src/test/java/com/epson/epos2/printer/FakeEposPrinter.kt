@@ -20,6 +20,11 @@ class Printer(val series: Int, val lang: Int, val context: Context) {
     val calls = mutableListOf<String>()
     var statusInfo = PrinterStatusInfo()
     var connected = false
+    /** Code renvoyé à onPtrReceive après sendData (CODE_SUCCESS par défaut). */
+    var receiveCode = CODE_SUCCESS
+    /** false = l'imprimante ne répond jamais (callback jamais appelé). */
+    var respond = true
+    private var receiveListener: ReceiveListener? = null
 
     init { instances.add(this) }
 
@@ -43,7 +48,13 @@ class Printer(val series: Int, val lang: Int, val context: Context) {
     fun addFeedLine(line: Int): Int { calls.add("feed:$line"); return 0 }
     fun addSymbol(data: String, type: Int, level: Int, width: Int, height: Int, size: Int): Int { calls.add("symbol:$data"); return 0 }
     fun addBarcode(data: String, type: Int, hri: Int, font: Int, width: Int, height: Int): Int { calls.add("barcode:$data"); return 0 }
-    fun sendData(timeout: Int): Int { calls.add("sendData"); return 0 }
+    fun setReceiveEventListener(listener: ReceiveListener?) { receiveListener = listener }
+    fun sendData(timeout: Int): Int {
+        calls.add("sendData")
+        // Comme le vrai SDK : verdict asynchrone, sur un autre thread.
+        if (respond) receiveListener?.let { l -> Thread { l.onPtrReceive(this, receiveCode, statusInfo, "job") }.start() }
+        return 0
+    }
     fun getStatus(): PrinterStatusInfo = statusInfo
 
     companion object {
@@ -82,6 +93,10 @@ class Printer(val series: Int, val lang: Int, val context: Context) {
         @JvmField val HRI_BELOW = 2
         @JvmField val FONT_A = 0
         @JvmField val TM_M30 = 18
+        @JvmField val TM_T20 = 7
+        @JvmField val CODE_SUCCESS = 0
+        @JvmField val CODE_ERR_TIMEOUT = 5
+        @JvmField val CODE_ERR_EMPTY = 9
     }
 }
 
@@ -91,4 +106,9 @@ class PrinterStatusInfo {
     @JvmField var online = 1
     @JvmField var paper = 0
     @JvmField var coverOpen = 0
+}
+
+/** Faux ReceiveListener (signature du vrai SDK). */
+interface ReceiveListener {
+    fun onPtrReceive(printer: Printer, code: Int, status: PrinterStatusInfo, printJobId: String)
 }

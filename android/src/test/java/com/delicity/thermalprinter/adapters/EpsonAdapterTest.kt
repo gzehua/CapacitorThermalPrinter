@@ -157,6 +157,45 @@ class EpsonAdapterTest {
     }
 
     @Test
+    fun `seriesCandidates retire les lettres de revision finales`() {
+        assertEquals(listOf("TM_T20II", "TM_T20I", "TM_T20"), EpsonAdapter.seriesCandidates("TM-T20II"))
+        assertEquals(listOf("TM_M30III", "TM_M30II", "TM_M30I", "TM_M30"), EpsonAdapter.seriesCandidates("Epson TM-m30III"))
+        assertEquals(emptyList<String>(), EpsonAdapter.seriesCandidates("TM Printer"))
+    }
+
+    @Test
+    fun `connect choisit la serie TM_T20 pour une TM-T20II`() = runTest {
+        val adapter = EpsonAdapter(ctx)
+        adapter.connect(profile().copy(model = "TM-T20II", name = "TM-T20II"), 1000)
+        assertEquals(Printer.TM_T20, Printer.instances.last().series)
+    }
+
+    @Test
+    fun `printBitmap remonte le code d'erreur renvoye par l'imprimante`() = runTest {
+        val adapter = EpsonAdapter(ctx)
+        val p = profile()
+        adapter.connect(p, 1000)
+        Printer.instances.last().receiveCode = Printer.CODE_ERR_TIMEOUT
+        val bmp = Bitmap.createBitmap(384, 120, Bitmap.Config.ARGB_8888)
+        val e = runCatching { adapter.printBitmap(p, bmp, RenderOptions(widthDots = 384)) }.exceptionOrNull()
+        assertTrue("PrinterException attendue: $e", e is com.delicity.thermalprinter.model.PrinterException)
+        e as com.delicity.thermalprinter.model.PrinterException
+        assertEquals(ErrorCode.TIMEOUT, e.code)
+        assertEquals("CODE_ERR_TIMEOUT", e.detail)
+    }
+
+    @Test
+    fun `printBitmap sans reponse de l'imprimante est interrompu par le timeout`() = runTest {
+        val adapter = EpsonAdapter(ctx)
+        val p = profile()
+        adapter.connect(p, 1000)
+        Printer.instances.last().respond = false
+        val bmp = Bitmap.createBitmap(384, 120, Bitmap.Config.ARGB_8888)
+        val r = kotlinx.coroutines.withTimeoutOrNull(200) { adapter.printBitmap(p, bmp, RenderOptions(widthDots = 384)) }
+        assertEquals(null, r)
+    }
+
+    @Test
     fun `disconnect ferme la session`() = runTest {
         val adapter = EpsonAdapter(ctx)
         val p = profile()

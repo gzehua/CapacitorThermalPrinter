@@ -2,6 +2,9 @@ package com.delicity.thermalprinter.adapters
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
+import com.delicity.thermalprinter.Logger
 import com.delicity.thermalprinter.model.AdapterId
 import com.delicity.thermalprinter.model.DiscoveredPrinter
 import com.delicity.thermalprinter.model.ErrorCode
@@ -11,6 +14,8 @@ import com.delicity.thermalprinter.model.PrinterStatus
 import com.delicity.thermalprinter.model.RenderOptions
 import com.delicity.thermalprinter.model.Transport
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 
 /**
@@ -29,6 +34,16 @@ class EpsonAdapter(private val context: Context) : PrinterAdapter {
     override val id = AdapterId.EPSON
 
     private val cache = ConcurrentHashMap<String, Any>() // printerId -> com.epson.epos2.printer.Printer
+
+    /**
+     * Résultat (code `onPtrReceive`) attendu par printerId. `sendData` est ASYNCHRONE :
+     * il ne fait que mettre le job en file, le verdict de l'imprimante arrive plus tard
+     * dans le ReceiveListener. Sans l'attendre, un job refusé/perdu était annoncé réussi.
+     */
+    private val pendingReceive = ConcurrentHashMap<String, CompletableDeferred<Int>>()
+
+    /** Imprimantes dont le ReceiveListener est branché (sinon repli : pas d'attente). */
+    private val receiveTracked = ConcurrentHashMap.newKeySet<String>()
 
     override fun isAvailable(): Boolean = classExists(PRINTER)
 
@@ -106,7 +121,20 @@ class EpsonAdapter(private val context: Context) : PrinterAdapter {
     override suspend fun connect(profile: PrinterProfile, timeoutMs: Long) {
         ensureSdk()
         if (isConnected(profile.id)) return
-        val series = seriesConstFor(profile.model)
+        val target = targetFor(profile)
+        // USB : sans permission accordée par l'app, c'est `connect` du SDK qui affiche le
+        // dialogue système ; s'il est fermé (clic à côté) le SDK ne le réaffiche jamais et
+        // l'imprimante reste muette. On gère donc la permission nous-mêmes (recommandation
+        // Epson, § « To connect via USB ») : redemandée à chaque tentative tant que refusée.
+        val usbDevice = if (target.startsWith("USB:")) epsonUsbDevice(target) else null
+        if (usbDevice != null && !UsbPermission.ensure(context, usbDevice)) {
+            // Non retryable : pas de relance auto (3 dialogues d'affilée) — l'utilisateur relance.
+            throw PrinterException(ErrorCode.PERMISSION_DENIED, "Accès USB à l'imprimante Epson refusé")
+        }
+        // Via USB le SDK nomme l'imprimante « TM Printer » : le vrai modèle vient du
+        // descripteur USB (ex. « TM-T20II »), indispensable pour choisir la bonne série.
+        val usbModel = usbDevice?.let { runCatching { it.productName }.getOrNull() }
+        val series = seriesConstFor(listOfNotNull(usbModel, profile.model, profile.name))
         val lang = SdkReflect.staticInt(PRINTER, "MODEL_ANK", 0)
         val printer = SdkReflect.newInstance(
             PRINTER,
@@ -117,17 +145,21 @@ class EpsonAdapter(private val context: Context) : PrinterAdapter {
             SdkReflect.call(
                 printer, "connect",
                 arrayOf(String::class.java, Int::class.javaPrimitiveType!!),
-                arrayOf(targetFor(profile), SdkReflect.staticInt(PRINTER, "PARAM_DEFAULT", -2)),
+                arrayOf(target, SdkReflect.staticInt(PRINTER, "PARAM_DEFAULT", -2)),
             )
         } catch (e: Throwable) {
             throw PrinterException(ErrorCode.CONNECTION_FAILED, "Connexion Epson échouée: ${profile.address}", e.message, retryable = true)
         }
+        if (installReceiveListener(profile.id, printer)) receiveTracked.add(profile.id)
         cache[profile.id] = printer
+        Logger.log("epson", "connected", mapOf("id" to profile.id, "target" to target, "series" to series, "usbModel" to usbModel))
     }
 
     override fun isConnected(printerId: String): Boolean = cache.containsKey(printerId)
 
     override suspend fun disconnect(printerId: String) {
+        receiveTracked.remove(printerId)
+        pendingReceive.remove(printerId)?.cancel()
         cache.remove(printerId)?.let { printer ->
             runCatching { SdkReflect.call(printer, "disconnect") }
             runCatching { SdkReflect.call(printer, "clearCommandBuffer") }
@@ -167,12 +199,13 @@ class EpsonAdapter(private val context: Context) : PrinterAdapter {
                         arrayOf(SdkReflect.staticInt(PRINTER, "DRAWER_2PIN", 0), SdkReflect.staticInt(PRINTER, "PULSE_100", 0)),
                     )
                 }
-                SdkReflect.call(printer, "sendData", arrayOf(intT), arrayOf(SdkReflect.staticInt(PRINTER, "PARAM_DEFAULT", -2)))
+                sendAndAwait(profile.id, printer)
                 SdkReflect.call(printer, "endTransaction")
                 runCatching { SdkReflect.call(printer, "clearCommandBuffer") }
             }
         } catch (e: Throwable) {
-            runCatching { SdkReflect.call(printer, "clearCommandBuffer") }
+            abortJob(printer)
+            if (e is PrinterException || e is CancellationException) throw e
             throw PrinterException(ErrorCode.PRINT_FAILED, "Impression Epson échouée", e.message, retryable = true)
         }
         return bitmap.width * bitmap.height / 8
@@ -196,11 +229,12 @@ class EpsonAdapter(private val context: Context) : PrinterAdapter {
             for (item in items) mapTextItem(printer, item, profile)
             if (feedLines > 0) callInt(printer, "addFeedLine", feedLines)
             if (cut && profile.capabilities.supportsCut) callInt(printer, "addCut", SdkReflect.staticInt(PRINTER, "CUT_FEED", 1))
-            callInt(printer, "sendData", SdkReflect.staticInt(PRINTER, "PARAM_DEFAULT", -2))
+            sendAndAwait(profile.id, printer)
             SdkReflect.call(printer, "endTransaction")
             runCatching { SdkReflect.call(printer, "clearCommandBuffer") }
         } catch (e: Throwable) {
-            runCatching { SdkReflect.call(printer, "clearCommandBuffer") }
+            abortJob(printer)
+            if (e is PrinterException || e is CancellationException) throw e
             throw PrinterException(ErrorCode.PRINT_FAILED, "Impression texte Epson échouée", e.message, retryable = true)
         }
         return items.size
@@ -266,6 +300,71 @@ class EpsonAdapter(private val context: Context) : PrinterAdapter {
             is com.delicity.thermalprinter.model.PrintItem.Image, is com.delicity.thermalprinter.model.PrintItem.Raw -> Unit
         }
         @Suppress("UNUSED_EXPRESSION") P
+    }
+
+    // -------------------------------------------------------------------------
+    // Envoi + verdict imprimante (ReceiveListener)
+    // -------------------------------------------------------------------------
+
+    /** Branche le ReceiveListener ePOS2 ; false si l'API est introuvable (repli sans attente). */
+    private fun installReceiveListener(printerId: String, printer: Any): Boolean = runCatching {
+        val listenerClass = SdkReflect.classOrNull(RECEIVE_LISTENER)!!
+        val listener = SdkReflect.proxy(RECEIVE_LISTENER, mapOf(
+            // onPtrReceive(Printer, int code, PrinterStatusInfo, String printJobId)
+            "onPtrReceive" to { args ->
+                pendingReceive.remove(printerId)?.complete(args.getOrNull(1) as? Int ?: Int.MIN_VALUE)
+                null
+            },
+        ))
+        SdkReflect.call(printer, "setReceiveEventListener", arrayOf(listenerClass), arrayOf(listener))
+    }.isSuccess
+
+    /**
+     * `sendData` puis attente du verdict `onPtrReceive`. L'attente est suspendante : le
+     * `withTimeout` du moteur peut donc réellement interrompre un job bloqué (au lieu d'un
+     * « Impression en cours… » infini). Code ≠ CODE_SUCCESS -> erreur explicite.
+     */
+    private suspend fun sendAndAwait(printerId: String, printer: Any) {
+        val timeout = SdkReflect.staticInt(PRINTER, "PARAM_DEFAULT", -2)
+        if (printerId !in receiveTracked) {
+            callInt(printer, "sendData", timeout)
+            return
+        }
+        val result = CompletableDeferred<Int>()
+        pendingReceive[printerId] = result
+        try {
+            callInt(printer, "sendData", timeout)
+            val code = result.await()
+            if (code != SdkReflect.staticInt(PRINTER, "CODE_SUCCESS", 0)) {
+                val name = codeName(code)
+                Logger.log("epson", "print-refused", mapOf("id" to printerId, "code" to name))
+                throw PrinterException(errorCodeFor(name), "Impression Epson refusée par l'imprimante", name, retryable = true)
+            }
+        } finally {
+            pendingReceive.remove(printerId, result)
+        }
+    }
+
+    /** Nettoie la transaction en cours après un échec (best effort). */
+    private fun abortJob(printer: Any) {
+        runCatching { SdkReflect.call(printer, "endTransaction") }
+        runCatching { SdkReflect.call(printer, "clearCommandBuffer") }
+    }
+
+    /** Nom de la constante `CODE_*` du SDK (ex. "CODE_ERR_TIMEOUT"), pour logs/erreurs. */
+    private fun codeName(code: Int): String =
+        SdkReflect.classOrNull(PRINTER)?.fields
+            ?.firstOrNull { f ->
+                f.name.startsWith("CODE_") && f.type == Int::class.javaPrimitiveType &&
+                    runCatching { f.getInt(null) == code }.getOrDefault(false)
+            }?.name ?: "CODE_$code"
+
+    private fun errorCodeFor(codeName: String): ErrorCode = when {
+        "PAPER_EMPTY" in codeName -> ErrorCode.PAPER_EMPTY
+        "COVER_OPEN" in codeName -> ErrorCode.COVER_OPEN
+        "TIMEOUT" in codeName -> ErrorCode.TIMEOUT
+        "NOT_FOUND" in codeName || "DISCONNECT" in codeName || "CONNECT" in codeName -> ErrorCode.PRINTER_OFFLINE
+        else -> ErrorCode.PRINT_FAILED
     }
 
     private fun callInt(target: Any, method: String, value: Int) =
@@ -358,12 +457,14 @@ class EpsonAdapter(private val context: Context) : PrinterAdapter {
         }
     }
 
-    /** Constante de série modèle (ex "TM_M30") lue par réflexion, fallback TM_m30/TM_T88. */
-    private fun seriesConstFor(model: String?): Int {
+    /**
+     * Constante de série ePOS2 (ex. `TM_T20`) déduite des noms connus, lue par réflexion.
+     * Le SDK n'a pas de constante par révision : « TM-T20II » -> TM_T20II (absent) ->
+     * TM_T20I -> TM_T20 ✓. On retire donc les lettres finales jusqu'à trouver une série.
+     */
+    private fun seriesConstFor(names: List<String>): Int {
         val candidates = buildList {
-            model?.uppercase()?.replace(" ", "")?.replace("-", "")?.let { m ->
-                Regex("TM[_]?([A-Z0-9]+)").find(m)?.let { add("TM_${it.groupValues[1]}") }
-            }
+            for (n in names) addAll(seriesCandidates(n))
             add("TM_M30")
             add("TM_T88VI")
             add("TM_T20")
@@ -373,6 +474,18 @@ class EpsonAdapter(private val context: Context) : PrinterAdapter {
             if (v != Int.MIN_VALUE) return v
         }
         return 0
+    }
+
+    /**
+     * Epson branché en USB : le UsbDevice correspondant au target ("USB:/dev/bus/usb/…"),
+     * ou la seule Epson branchée si le target n'est pas un chemin. null si introuvable.
+     */
+    private fun epsonUsbDevice(target: String): UsbDevice? {
+        val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return null
+        val epsons = runCatching { usbManager.deviceList.values.filter { it.vendorId == EPSON_VENDOR_ID } }
+            .getOrDefault(emptyList())
+        val path = target.removePrefix("USB:")
+        return epsons.firstOrNull { it.deviceName == path } ?: epsons.singleOrNull()
     }
 
     private fun halftoneFor(dithering: String): Int = when (dithering) {
@@ -390,6 +503,16 @@ class EpsonAdapter(private val context: Context) : PrinterAdapter {
         private const val FILTER_OPTION = "com.epson.epos2.discovery.FilterOption"
         private const val DISCOVERY = "com.epson.epos2.discovery.Discovery"
         private const val DISCOVERY_LISTENER = "com.epson.epos2.discovery.DiscoveryListener"
+        private const val RECEIVE_LISTENER = "com.epson.epos2.printer.ReceiveListener"
+        private const val EPSON_VENDOR_ID = 0x04B8
+
+        /** "TM-T20II" -> [TM_T20II, TM_T20I, TM_T20] ; noms génériques ("TM Printer") -> []. */
+        internal fun seriesCandidates(name: String): List<String> {
+            val m = name.uppercase().replace(" ", "").replace("-", "").replace("_", "")
+            val core = Regex("TM([A-Z]+[0-9]+[A-Z]*)").find(m)?.groupValues?.get(1) ?: return emptyList()
+            val digitsEnd = core.indexOfLast { it.isDigit() } + 1
+            return (core.length downTo digitsEnd).map { "TM_${core.substring(0, it)}" }
+        }
 
         fun classExists(name: String): Boolean = try {
             Class.forName(name); true

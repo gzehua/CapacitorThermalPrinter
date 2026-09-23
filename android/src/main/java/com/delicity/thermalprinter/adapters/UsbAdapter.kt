@@ -1,10 +1,6 @@
 package com.delicity.thermalprinter.adapters
 
-import android.app.PendingIntent
-import android.content.BroadcastReceiver
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
@@ -12,7 +8,6 @@ import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
-import android.os.Build
 import com.delicity.thermalprinter.image.ImageProcessor
 import com.delicity.thermalprinter.model.AdapterId
 import com.delicity.thermalprinter.model.DiscoveredPrinter
@@ -23,8 +18,6 @@ import com.delicity.thermalprinter.model.PrinterStatus
 import com.delicity.thermalprinter.model.RenderOptions
 import com.delicity.thermalprinter.model.Transport
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.coroutines.resume
-import kotlinx.coroutines.suspendCancellableCoroutine
 
 /**
  * Adapter USB (Android host) pour imprimantes ESC/POS branchées en USB.
@@ -84,9 +77,8 @@ class UsbAdapter(private val context: Context) : PrinterAdapter {
         val device = findDevice(profile.address)
             ?: throw PrinterException(ErrorCode.PRINTER_NOT_FOUND, "Périphérique USB introuvable: ${profile.address}")
 
-        if (!usbManager.hasPermission(device)) {
-            val granted = requestPermission(device, timeoutMs)
-            if (!granted) throw PrinterException(ErrorCode.PERMISSION_DENIED, "Permission USB refusée", retryable = true)
+        if (!UsbPermission.ensure(context, device)) {
+            throw PrinterException(ErrorCode.PERMISSION_DENIED, "Permission USB refusée", retryable = true)
         }
 
         val iface = (0 until device.interfaceCount)
@@ -213,36 +205,7 @@ class UsbAdapter(private val context: Context) : PrinterAdapter {
         return usbManager.deviceList.values.firstOrNull { it.vendorId == vid && it.productId == pid }
     }
 
-    /** Demande la permission USB runtime et suspend jusqu'à la réponse (ou timeout). */
-    private suspend fun requestPermission(device: UsbDevice, timeoutMs: Long): Boolean =
-        suspendCancellableCoroutine { cont ->
-            val action = "$ACTION_USB_PERMISSION.${device.deviceId}"
-            val receiver = object : BroadcastReceiver() {
-                override fun onReceive(ctx: Context, intent: Intent) {
-                    if (intent.action != action) return
-                    runCatching { context.unregisterReceiver(this) }
-                    val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                    if (cont.isActive) cont.resume(granted)
-                }
-            }
-            val filter = IntentFilter(action)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-            } else {
-                @Suppress("UnspecifiedRegisterReceiverFlag")
-                context.registerReceiver(receiver, filter)
-            }
-            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
-            val pi = PendingIntent.getBroadcast(context, 0, Intent(action).setPackage(context.packageName), flags)
-            cont.invokeOnCancellation { runCatching { context.unregisterReceiver(receiver) } }
-            usbManager.requestPermission(device, pi)
-        }
-
     private fun ensureUsb() {
         if (!isAvailable()) throw PrinterException(ErrorCode.UNSUPPORTED_TRANSPORT, "USB host indisponible")
-    }
-
-    companion object {
-        private const val ACTION_USB_PERMISSION = "com.delicity.thermalprinter.USB_PERMISSION"
     }
 }
