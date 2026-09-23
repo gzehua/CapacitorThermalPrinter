@@ -4,6 +4,27 @@ Toutes les modifications notables de ce projet sont documentées ici.
 Le format suit [Keep a Changelog](https://keepachangelog.com/) et
 [SemVer](https://semver.org/lang/fr/).
 
+## [8.3.1]
+
+### Corrigé
+- **Epson USB (Android) : « Imprimante connectée ! » mais aucun ticket, et « Impression en
+  cours… » infini.** Constaté sur une TM-T20II branchée en USB (l'imprimante fonctionnait
+  depuis une autre app sur le même branchement). Trois corrections :
+  1. **Permission USB gérée par le plugin.** Jusqu'ici c'est `connect()` du SDK ePOS2 qui
+     affichait le dialogue d'accès USB ; fermé par un clic à côté, il n'était jamais
+     réaffiché et l'imprimante restait muette. La permission est maintenant demandée
+     avant chaque connexion Epson USB (recommandation Epson) et redemandée tant qu'elle
+     est refusée (`PERMISSION_DENIED` sinon).
+  2. **Verdict d'impression attendu.** `sendData` est asynchrone : le plugin attend
+     désormais la réponse de l'imprimante (`onPtrReceive`). Un ticket refusé remonte une
+     erreur explicite (code Epson `CODE_ERR_*` en détail : timeout, papier, capot…) au
+     lieu d'être annoncé réussi, et le timeout d'impression interrompt réellement un job
+     bloqué.
+  3. **Bonne série d'imprimante.** En USB le SDK nomme l'imprimante « TM Printer » et le
+     plugin retombait sur la série TM-m30. Le modèle est lu dans le descripteur USB, et
+     les suffixes de révision sont retirés jusqu'à trouver la série du SDK
+     (`TM-T20II` → `TM_T20`, `TM-m30III` → `TM_M30III`/`TM_M30II`/`TM_M30`).
+
 ## [8.3.0]
 
 ### Corrigé
