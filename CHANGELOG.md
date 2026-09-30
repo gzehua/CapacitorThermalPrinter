@@ -4,7 +4,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 Le format suit [Keep a Changelog](https://keepachangelog.com/) et
 [SemVer](https://semver.org/lang/fr/).
 
-## [Unreleased]
+## [8.3.2]
 
 ### Ajouté
 - **Epson USB sur iPhone/iPad.** Le SDK ePOS2 iOS gère l'USB via MFi (ExternalAccessory,
