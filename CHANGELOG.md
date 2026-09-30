@@ -4,6 +4,20 @@ Toutes les modifications notables de ce projet sont documentées ici.
 Le format suit [Keep a Changelog](https://keepachangelog.com/) et
 [SemVer](https://semver.org/lang/fr/).
 
+## [Unreleased]
+
+### Corrigé
+- **Doublons Epson en Bluetooth (« Epson · Bluetooth » + « Natif Bluetooth », et une ligne
+  « Zebra <MAC> »).** Le découvreur Bluetooth du SDK Zebra remonte toutes les imprimantes
+  appairées, Epson et Star compris. Le rapprochement natif → SDK tombait d'abord sur cette
+  fausse entrée Zebra (même MAC), et l'exception Zebra gardait alors le doublon natif.
+  Désormais :
+  1. un SDK de marque (Epson, Star, Brother) passe avant Zebra pour absorber l'entrée native ;
+  2. une entrée Zebra dont l'adresse a été identifiée par un SDK de marque est un faux
+     positif et disparaît (seul rapprochement SDK↔SDK, par adresse uniquement) ;
+  3. le préfixe de cible ePOS2 (`BT:`, `TCP:`, `USB:`) est ignoré pour comparer les adresses.
+  Même correctif en TS, Android et iOS.
+
 ## [8.3.2]
 
 ### Ajouté

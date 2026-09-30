@@ -89,20 +89,29 @@ export function mergeDiscoveries(
  * l'entrée SDK (priorité produit) et on y fusionne la source native.
  *
  * Critère de rapprochement demandé : même nom OU même adresse normalisée.
- * On ne fusionne que du natif VERS du SDK (jamais SDK↔SDK ni natif↔natif) afin
- * de ne pas masquer par erreur deux imprimantes distinctes de même modèle.
+ * On ne fusionne que du natif VERS du SDK afin de ne pas masquer par erreur deux
+ * imprimantes distinctes de même modèle. Seule exception SDK↔SDK, par adresse
+ * uniquement : le découvreur Bluetooth Zebra remonte TOUTES les imprimantes
+ * appairées (« Zebra <MAC> ») ; si un SDK de marque a identifié la même adresse,
+ * l'entrée Zebra est un faux positif et disparaît.
  */
 function collapseSdkDuplicates(list: DiscoveredPrinter[]): DiscoveredPrinter[] {
-  const sdkEntries = list.filter((p) => p.isSdk);
+  const brandSdk = list.filter((p) => p.isSdk && p.adapter !== 'zebra');
+  const sdkEntries = list.filter(
+    (p) => p.isSdk && !(p.adapter === 'zebra' && brandSdk.some((b) => sameAddress(b.address, p.address))),
+  );
   if (sdkEntries.length === 0) return list;
+  // Un SDK de marque passe avant Zebra : sinon le natif, rapproché d'abord du faux
+  // positif Zebra, échappe à la fusion (exception Zebra ci-dessous).
+  const candidates = [...sdkEntries.filter((p) => p.adapter !== 'zebra'), ...sdkEntries.filter((p) => p.adapter === 'zebra')];
 
   const result: DiscoveredPrinter[] = [];
   for (const p of list) {
     if (p.isSdk) {
-      result.push(p);
+      if (sdkEntries.includes(p)) result.push(p);
       continue;
     }
-    const match = sdkEntries.find((s) => sameAddress(s.address, p.address) || sameName(s.name, p.name));
+    const match = candidates.find((s) => sameAddress(s.address, p.address) || sameName(s.name, p.name));
     if (match) {
       // Exception Zebra : on NE fusionne PAS le doublon natif (BLE/Classic). Une Zebra
       // peut être en `line_print` ou refuser le ZPL : on garde l'entrée native générique
@@ -122,9 +131,12 @@ function collapseSdkDuplicates(list: DiscoveredPrinter[]): DiscoveredPrinter[] {
   return result;
 }
 
-/** Adresse comparable cross-transport : minuscule, port retiré pour les IPv4. */
+/**
+ * Adresse comparable cross-transport : minuscule, préfixe de cible ePOS2 retiré
+ * (`BT:<mac>`, `TCP:<ip>`…), port retiré pour les IPv4.
+ */
 function bareAddress(a: string): string {
-  const s = a.trim().toLowerCase();
+  const s = a.trim().toLowerCase().replace(/^(bt|ble|tcps?|usb):/, '');
   return s.includes('.') ? s.replace(/:\d+$/, '') : s;
 }
 

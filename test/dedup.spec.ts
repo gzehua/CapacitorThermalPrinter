@@ -194,4 +194,29 @@ describe('mergeDiscoveries', () => {
     );
     expect(merged).toHaveLength(2);
   });
+
+  it('Epson en Bluetooth : ni doublon natif ni faux positif Zebra (même MAC)', () => {
+    const mac = '00:01:90:60:C3:B3';
+    const merged = mergeDiscoveries(
+      [
+        printer({ id: `zebra:${mac}`, name: `Zebra ${mac}`, adapter: 'zebra', transport: 'bluetooth', address: mac, isSdk: true }),
+        printer({ id: `bluetooth:${mac}`, name: 'TM-m30II_007731', transport: 'bluetooth', address: mac }),
+        printer({ id: `epson:BT:${mac}`, name: 'TM-m30II_007731', adapter: 'epson', transport: 'bluetooth', address: `BT:${mac}`, isSdk: true }),
+      ],
+      rank,
+    );
+    expect(merged.map((p) => p.adapter)).toEqual(['epson']);
+  });
+
+  it('garde la Zebra quand aucun SDK de marque ne revendique son adresse', () => {
+    const mac = 'AC:3F:A4:00:00:01';
+    const merged = mergeDiscoveries(
+      [
+        printer({ id: `zebra:${mac}`, name: `Zebra ${mac}`, adapter: 'zebra', transport: 'bluetooth', address: mac, isSdk: true }),
+        printer({ id: `bluetooth:${mac}`, name: 'ZQ520', transport: 'bluetooth', address: mac }),
+      ],
+      rank,
+    );
+    expect(merged.map((p) => p.adapter).sort()).toEqual(['escpos', 'zebra']);
+  });
 });

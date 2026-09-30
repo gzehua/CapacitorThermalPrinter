@@ -143,20 +143,29 @@ class DiscoveryManager(
      * fusionne la source native, au lieu d'afficher deux lignes.
      *
      * Rapprochement demandé : même nom OU même adresse normalisée. On ne fusionne
-     * que du natif VERS du SDK (jamais SDK↔SDK ni natif↔natif) pour ne pas masquer
-     * par erreur deux imprimantes distinctes de même modèle.
+     * que du natif VERS du SDK pour ne pas masquer par erreur deux imprimantes
+     * distinctes de même modèle. Seule exception SDK↔SDK, par adresse uniquement : le
+     * découvreur Bluetooth Zebra remonte TOUTES les imprimantes appairées
+     * (« Zebra <MAC> ») ; si un SDK de marque a identifié la même adresse, l'entrée
+     * Zebra est un faux positif et disparaît.
      */
     private fun collapseSdkDuplicates(list: List<DiscoveredPrinter>): List<DiscoveredPrinter> {
-        val sdkEntries = list.filter { it.adapter.isSdk }
+        val brandSdk = list.filter { it.adapter.isSdk && it.adapter != AdapterId.ZEBRA }
+        val sdkEntries = list.filter { p ->
+            p.adapter.isSdk && !(p.adapter == AdapterId.ZEBRA && brandSdk.any { sameAddress(it.address, p.address) })
+        }
         if (sdkEntries.isEmpty()) return list
+        // Un SDK de marque passe avant Zebra : sinon le natif, rapproché d'abord du faux
+        // positif Zebra, échappe à la fusion (exception Zebra ci-dessous).
+        val candidates = sdkEntries.sortedBy { it.adapter == AdapterId.ZEBRA }
 
         val result = mutableListOf<DiscoveredPrinter>()
         for (p in list) {
             if (p.adapter.isSdk) {
-                result.add(p)
+                if (sdkEntries.any { it === p }) result.add(p)
                 continue
             }
-            val match = sdkEntries.firstOrNull { sameAddress(it.address, p.address) || sameName(it.name, p.name) }
+            val match = candidates.firstOrNull { sameAddress(it.address, p.address) || sameName(it.name, p.name) }
             if (match != null) {
                 // Exception Zebra : on NE fusionne PAS le doublon natif (BLE/Classic). Une Zebra
                 // peut être configurée en `line_print` ou refuser le ZPL : on conserve donc
@@ -177,9 +186,12 @@ class DiscoveryManager(
         return result
     }
 
-    /** Adresse comparable cross-transport : minuscule, port retiré pour les IPv4. */
+    /**
+     * Adresse comparable cross-transport : minuscule, préfixe de cible ePOS2 retiré
+     * (`BT:<mac>`, `TCP:<ip>`…), port retiré pour les IPv4.
+     */
     private fun bareAddress(a: String): String {
-        val s = a.trim().lowercase()
+        val s = a.trim().lowercase().replace(Regex("^(bt|ble|tcps?|usb):"), "")
         return if (s.contains('.')) s.replace(Regex(":\\d+$"), "") else s
     }
 

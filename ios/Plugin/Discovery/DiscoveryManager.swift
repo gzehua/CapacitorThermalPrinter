@@ -91,10 +91,20 @@ final class DiscoveryManager {
     /// native, au lieu d'afficher deux lignes.
     ///
     /// Rapprochement demandé : même nom OU même adresse normalisée. On ne fusionne
-    /// que du natif VERS du SDK (jamais SDK↔SDK ni natif↔natif) pour ne pas masquer
-    /// par erreur deux imprimantes distinctes de même modèle.
+    /// que du natif VERS du SDK pour ne pas masquer par erreur deux imprimantes
+    /// distinctes de même modèle. Seule exception SDK↔SDK, par adresse uniquement : si
+    /// un SDK de marque a identifié l'adresse d'une entrée Zebra, celle-ci est un faux
+    /// positif (le découvreur Zebra remonte toutes les imprimantes) et disparaît.
     private func collapseSdkDuplicates(_ list: [DiscoveredPrinter]) -> [DiscoveredPrinter] {
-        let sdkIndices = list.indices.filter { list[$0].adapter.isSdk }
+        let brandSdk = list.filter { $0.adapter.isSdk && $0.adapter != .zebra }
+        // Un SDK de marque passe avant Zebra : sinon le natif, rapproché d'abord du faux
+        // positif Zebra, échappe à la fusion (exception Zebra ci-dessous).
+        let sdkIndices = list.indices
+            .filter { i in
+                let p = list[i]
+                return p.adapter.isSdk && !(p.adapter == .zebra && brandSdk.contains { sameAddress($0.address, p.address) })
+            }
+            .sorted { (list[$0].adapter == .zebra ? 1 : 0) < (list[$1].adapter == .zebra ? 1 : 0) }
         if sdkIndices.isEmpty { return list }
 
         var merged = list
@@ -123,9 +133,11 @@ final class DiscoveryManager {
         return sdkIndices.map { merged[$0] } + result
     }
 
-    /// Adresse comparable cross-transport : minuscule, port retiré pour les IPv4.
+    /// Adresse comparable cross-transport : minuscule, préfixe de cible ePOS2 retiré
+    /// (`BT:<mac>`, `TCP:<ip>`…), port retiré pour les IPv4.
     private func bareAddress(_ a: String) -> String {
         let s = a.trimmingCharacters(in: .whitespaces).lowercased()
+            .replacingOccurrences(of: "^(bt|ble|tcps?|usb):", with: "", options: .regularExpression)
         guard s.contains(".") else { return s }
         return s.replacingOccurrences(of: ":\\d+$", with: "", options: .regularExpression)
     }
