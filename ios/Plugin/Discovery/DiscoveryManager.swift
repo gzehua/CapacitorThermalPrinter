@@ -102,7 +102,7 @@ final class DiscoveryManager {
         let sdkIndices = list.indices
             .filter { i in
                 let p = list[i]
-                return p.adapter.isSdk && !(p.adapter == .zebra && brandSdk.contains { sameAddress($0.address, p.address) })
+                return p.adapter.isSdk && !(p.adapter == .zebra && brandSdk.contains { Self.sameAddress($0.address, p.address) })
             }
             .sorted { (list[$0].adapter == .zebra ? 1 : 0) < (list[$1].adapter == .zebra ? 1 : 0) }
         if sdkIndices.isEmpty { return list }
@@ -112,7 +112,7 @@ final class DiscoveryManager {
         for p in list {
             if p.adapter.isSdk { continue } // les entrées SDK sont émises depuis `merged`
             if let mi = sdkIndices.first(where: {
-                sameAddress(merged[$0].address, p.address) || sameName(merged[$0].name, p.name)
+                Self.sameAddress(merged[$0].address, p.address) || Self.sameName(merged[$0].name, p.name)
             }) {
                 // Exception Zebra : on NE fusionne PAS le doublon natif (BLE/Classic). Une Zebra
                 // peut être en `line_print` ou refuser le ZPL : on garde l'entrée native générique
@@ -133,21 +133,32 @@ final class DiscoveryManager {
         return sdkIndices.map { merged[$0] } + result
     }
 
+    /// Entrée SDK de marque (Epson, Star, Brother) désignant la même imprimante physique que
+    /// l'imprimante native (`address`, `name`) : même adresse, sinon même nom si un seul candidat
+    /// le porte (deux imprimantes du même modèle ne doivent pas être confondues). Zebra exclu :
+    /// son entrée native est conservée à dessein (cf. collapseSdkDuplicates).
+    static func sdkTwin(address: String, name: String, in candidates: [DiscoveredPrinter]) -> DiscoveredPrinter? {
+        let brand = candidates.filter { $0.adapter.isSdk && $0.adapter != .zebra }
+        if let byAddress = brand.first(where: { sameAddress($0.address, address) }) { return byAddress }
+        let byName = brand.filter { sameName($0.name, name) }
+        return byName.count == 1 ? byName[0] : nil
+    }
+
     /// Adresse comparable cross-transport : minuscule, préfixe de cible ePOS2 retiré
     /// (`BT:<mac>`, `TCP:<ip>`…), port retiré pour les IPv4.
-    private func bareAddress(_ a: String) -> String {
+    private static func bareAddress(_ a: String) -> String {
         let s = a.trimmingCharacters(in: .whitespaces).lowercased()
             .replacingOccurrences(of: "^(bt|ble|tcps?|usb):", with: "", options: .regularExpression)
         guard s.contains(".") else { return s }
         return s.replacingOccurrences(of: ":\\d+$", with: "", options: .regularExpression)
     }
 
-    private func sameAddress(_ a: String, _ b: String) -> Bool {
+    private static func sameAddress(_ a: String, _ b: String) -> Bool {
         let na = bareAddress(a)
         return !na.isEmpty && na == bareAddress(b)
     }
 
-    private func sameName(_ a: String, _ b: String) -> Bool {
+    private static func sameName(_ a: String, _ b: String) -> Bool {
         let na = a.trimmingCharacters(in: .whitespaces).lowercased()
         return !na.isEmpty && na == b.trimmingCharacters(in: .whitespaces).lowercased()
     }

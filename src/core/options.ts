@@ -186,6 +186,17 @@ export interface ConnectOptions {
    * Défaut `false`.
    */
   setAsDefault?: boolean;
+  /**
+   * Bascule automatique vers le SDK fabricant. Si l'imprimante est connectée en **natif
+   * Bluetooth/BLE** et qu'un SDK de marque (Epson, Star, Brother) la reconnaît (même adresse,
+   * ou même nom sans ambiguïté), la connexion native est fermée et l'imprimante est reconnectée
+   * via le SDK. Cas typique : une Star jamais appairée n'est visible du SDK Star qu'après
+   * l'appairage déclenché par la connexion native — or elle ne comprend pas l'ESC/POS.
+   * Si le SDK échoue, la connexion native est rétablie. Ignoré avec `forceAdapter`.
+   * `connectPrinter()` renvoie alors le `printerId` SDK (à utiliser pour la suite).
+   * Défaut `true`.
+   */
+  preferSdk?: boolean;
 }
 
 /**

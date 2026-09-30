@@ -100,6 +100,10 @@ class ThermalPrinterEngine(private val context: Context) {
 
     private companion object {
         const val RECONNECT_ATTEMPTS = 3
+        /** Durée du scan SDK qui cherche le « jumeau » SDK d'une imprimante native. */
+        const val SDK_SWITCH_DISCOVERY_MS = 5000L
+        /** Pause entre la fermeture du canal natif et la connexion SDK (à ajuster sur matériel). */
+        const val SDK_SWITCH_RELEASE_MS = 500L
     }
 
     /** Mise à jour d'état d'un job d'impression. */
@@ -152,27 +156,50 @@ class ThermalPrinterEngine(private val context: Context) {
     // Connexion / reconnexion
     // -------------------------------------------------------------------------
 
-    /** Résultat de connexion : état + taille papier déduite (best-effort, null si inconnue). */
-    data class ConnectResult(val connected: Boolean, val paper: com.delicity.thermalprinter.model.PaperInfo?)
+    /**
+     * Résultat de connexion : état + taille papier déduite (best-effort, null si inconnue) +
+     * imprimante réellement connectée (différente de celle demandée après une bascule SDK).
+     */
+    data class ConnectResult(
+        val connected: Boolean,
+        val paper: com.delicity.thermalprinter.model.PaperInfo?,
+        val printerId: String,
+        val adapter: AdapterId,
+    )
 
-    suspend fun connect(printerId: String, timeoutMs: Long, forceAdapter: AdapterId?, setAsDefault: Boolean = false): ConnectResult {
-        val profile = resolveProfile(printerId, forceAdapter)
-        val adapter = adapterFor(profile)
-            ?: throw PrinterException(ErrorCode.UNSUPPORTED_PRINTER, "Aucun adapter pour ${profile.adapter.value}")
-        if (!adapter.isAvailable()) {
-            throw PrinterException(ErrorCode.SDK_NOT_AVAILABLE, "Adapter ${profile.adapter.value} indisponible")
+    suspend fun connect(
+        printerId: String,
+        timeoutMs: Long,
+        forceAdapter: AdapterId?,
+        setAsDefault: Boolean = false,
+        preferSdk: Boolean = true,
+    ): ConnectResult {
+        val native = resolveProfile(printerId, forceAdapter)
+        val nativeAdapter = adapterFor(native)
+            ?: throw PrinterException(ErrorCode.UNSUPPORTED_PRINTER, "Aucun adapter pour ${native.adapter.value}")
+        if (!nativeAdapter.isAvailable()) {
+            throw PrinterException(ErrorCode.SDK_NOT_AVAILABLE, "Adapter ${native.adapter.value} indisponible")
         }
-        Logger.log("connect", "connecting", mapOf("id" to printerId, "adapter" to profile.adapter.value))
+        Logger.log("connect", "connecting", mapOf("id" to printerId, "adapter" to native.adapter.value))
         // Bluetooth : une imprimante non appairée attend la pop-up d'appairage avant de se connecter.
-        val pairingBudget = if (profile.transport == Transport.BLUETOOTH) BluetoothSppTransport.PAIRING_TIMEOUT_MS else 0L
-        withTimeout(timeoutMs + 1000 + pairingBudget) { adapter.connect(profile, timeoutMs) }
-        val connected = adapter.isConnected(printerId)
-        Logger.log("connect", "connected", mapOf("id" to printerId, "ok" to connected))
+        val pairingBudget = if (native.transport == Transport.BLUETOOTH) BluetoothSppTransport.PAIRING_TIMEOUT_MS else 0L
+        withTimeout(timeoutMs + 1000 + pairingBudget) { nativeAdapter.connect(native, timeoutMs) }
+
+        var profile = native
+        if (preferSdk && forceAdapter == null && !native.adapter.isSdk &&
+            (native.transport == Transport.BLUETOOTH || native.transport == Transport.BLE) &&
+            nativeAdapter.isConnected(printerId)
+        ) {
+            switchToSdk(native, nativeAdapter, timeoutMs)?.let { profile = it }
+        }
+
+        val connected = adapterFor(profile)?.isConnected(profile.id) == true
+        Logger.log("connect", "connected", mapOf("id" to profile.id, "ok" to connected))
         // setAsDefault UNIQUEMENT si la connexion a réussi.
         if (connected && setAsDefault) {
             store.upsert(profile)
-            store.setDefault(printerId)
-            Logger.log("connect", "set-default-after-connect", mapOf("id" to printerId))
+            store.setDefault(profile.id)
+            Logger.log("connect", "set-default-after-connect", mapOf("id" to profile.id))
         }
         // Taille papier best-effort (déduite du modèle remonté), null si inconnue.
         val paper = if (connected) {
@@ -180,7 +207,39 @@ class ThermalPrinterEngine(private val context: Context) {
         } else {
             null
         }
-        return ConnectResult(connected, paper)
+        return ConnectResult(connected, paper, profile.id, profile.adapter)
+    }
+
+    /**
+     * Imprimante connectée en natif Bluetooth/BLE qu'un SDK de marque sait piloter : on bascule
+     * sur le SDK (une Star ne comprend pas l'ESC/POS). Cas type : Star jamais appairée, invisible
+     * du SDK Star (qui ne liste que les appareils appairés) jusqu'à l'appairage que la connexion
+     * native vient de déclencher. Best-effort : si le SDK échoue, on revient au natif.
+     */
+    private suspend fun switchToSdk(native: PrinterProfile, nativeAdapter: PrinterAdapter, timeoutMs: Long): PrinterProfile? {
+        val sources = setOf("epson", "star", "brother")
+        if (adapters.none { it.id.value in sources && it.isAvailable() }) return null
+        val (found, _) = DiscoveryManager(context, btAdapter, adapters)
+            .discover(DiscoveryManager.Options(sources = sources, timeoutMs = SDK_SWITCH_DISCOVERY_MS)) {}
+        val twin = DiscoveryManager.sdkTwinOf(native.address, native.name, found) ?: return null
+        val sdkAdapter = adapterFor(twin.adapter) ?: return null
+        val sdkProfile = toEphemeralProfile(twin)
+        Logger.log("connect", "sdk-switch", mapOf("from" to native.id, "to" to twin.id))
+        // Une imprimante Bluetooth n'accepte qu'une connexion : on libère d'abord le canal natif.
+        runCatching { nativeAdapter.disconnect(native.id) }
+        delay(SDK_SWITCH_RELEASE_MS) // le firmware libère le canal avec un léger retard
+        val switched = runCatching {
+            withTimeout(timeoutMs + 1000) { sdkAdapter.connect(sdkProfile, timeoutMs) }
+        }.onFailure { Logger.error("connect", "sdk-switch-failed ${twin.id}", it) }.isSuccess &&
+            sdkAdapter.isConnected(twin.id)
+        if (switched) {
+            // Rendre le profil SDK résolvable (setDefault / impression) même hors découverte UI.
+            lastDiscovered = lastDiscovered.filterNot { it.id == twin.id } + twin
+            return sdkProfile
+        }
+        runCatching { withTimeout(timeoutMs + 1000) { nativeAdapter.connect(native, timeoutMs) } }
+            .onFailure { Logger.error("connect", "native-restore-failed ${native.id}", it) }
+        return null
     }
 
     suspend fun disconnect(printerId: String) {

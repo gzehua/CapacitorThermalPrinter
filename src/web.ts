@@ -1,6 +1,7 @@
 import { WebPlugin } from '@capacitor/core';
 
 import type {
+  ConnectResult,
   PermissionStatus,
   ThermalPrinterPlugin,
 } from './definitions';
@@ -37,7 +38,7 @@ export class ThermalPrinterWeb extends WebPlugin implements ThermalPrinterPlugin
     return { printers: [] };
   }
 
-  async connectPrinter(_options: ConnectOptions): Promise<{ connected: boolean; paper: import('./core/paper').PaperInfo | null }> {
+  async connectPrinter(_options: ConnectOptions): Promise<ConnectResult> {
     throw this.unsupported('connectPrinter');
   }
 

@@ -301,7 +301,7 @@ if (!enabled) {
 import { ThermalPrinter } from '@delicity/capacitor-thermal-printer';
 
 ThermalPrinter.discoverPrinters(options?)   // → { printers: DiscoveredPrinter[] }
-ThermalPrinter.connectPrinter({ printerId, timeoutMs?, forceAdapter?, setAsDefault? })  // → { connected, paper: PaperInfo | null }
+ThermalPrinter.connectPrinter({ printerId, timeoutMs?, forceAdapter?, setAsDefault?, preferSdk? })  // → { connected, paper: PaperInfo | null, printerId, adapter }
 ThermalPrinter.disconnectPrinter({ printerId })                          // → void
 ThermalPrinter.setDefaultPrinter({ printerId })                          // → { profile }
 ThermalPrinter.getDefaultPrinter()                                       // → { profile | null }
@@ -327,6 +327,15 @@ ThermalPrinter.addListener('printJobStatus', e => ...)      // JobState: pending
 > **`connectPrinter({ setAsDefault: true })`** sets the default printer **only if
 > the connection succeeds** (`connect` + `setDefaultPrinter` in one step, without
 > persisting an unreachable printer).
+
+> **Automatic switch to the vendor SDK (`preferSdk`, default `true`).** When a printer
+> connected over **native Bluetooth/BLE** is also recognised by a vendor SDK (Epson, Star,
+> Brother — same address, or same unambiguous name), `connectPrinter` closes the native
+> channel and reconnects through the SDK. Typical case: a never-paired Star is only visible to
+> the native scanner; the native connection pairs it, and the Star SDK (which lists paired
+> devices only) can then drive it — the Star would not understand ESC/POS. Costs a 5 s SDK scan
+> on native Bluetooth connects; falls back to native if the SDK fails. Ignored with
+> `forceAdapter`. Use the returned **`printerId`** afterwards (`setAsDefault` applies to it).
 
 > **Paper size on connect.** `connectPrinter` also returns `paper` — the paper size
 > deduced from the printer's model (**best-effort**), or **`null`** when it can't be

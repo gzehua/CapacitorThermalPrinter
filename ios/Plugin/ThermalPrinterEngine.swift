@@ -71,37 +71,86 @@ final class ThermalPrinterEngine {
 
     // MARK: Connexion
 
-    /// Résultat de connexion : état + taille papier déduite (best-effort, nil si inconnue).
-    struct ConnectResult { let connected: Bool; let paper: PaperInfo? }
+    /// Résultat de connexion : état + taille papier déduite (best-effort, nil si inconnue) +
+    /// imprimante réellement connectée (différente de celle demandée après une bascule SDK).
+    struct ConnectResult { let connected: Bool; let paper: PaperInfo?; let printerId: String; let adapter: AdapterId }
 
-    func connect(_ printerId: String, timeoutMs: Int, forceAdapter: AdapterId?, setAsDefault: Bool = false, paperWidthMm: Int? = nil) async throws -> ConnectResult {
-        var profile = try resolveProfile(printerId, forceAdapter: forceAdapter)
+    /// Durée du scan SDK qui cherche le « jumeau » SDK d'une imprimante native.
+    private static let sdkSwitchDiscoveryMs = 5000
+
+    func connect(_ printerId: String, timeoutMs: Int, forceAdapter: AdapterId?, setAsDefault: Bool = false, paperWidthMm: Int? = nil, preferSdk: Bool = true) async throws -> ConnectResult {
+        var native = try resolveProfile(printerId, forceAdapter: forceAdapter)
         // Largeur papier explicite (mm) : devient la largeur par défaut de CETTE imprimante
         // (utilisée par printImage ET printText). Persistée pour les impressions suivantes.
         if let mm = paperWidthMm {
-            profile.capabilities.paperWidthMm = mm
-            profile.capabilities.printableDots = Self.dots(forMm: mm)
+            native.capabilities.paperWidthMm = mm
+            native.capabilities.printableDots = Self.dots(forMm: mm)
         }
-        guard let adapter = adapterFor(profile.adapter) else {
-            throw PrinterError(.UNSUPPORTED_PRINTER, "Aucun adapter pour \(profile.adapter.rawValue)")
+        guard let adapter = adapterFor(native.adapter) else {
+            throw PrinterError(.UNSUPPORTED_PRINTER, "Aucun adapter pour \(native.adapter.rawValue)")
         }
         guard adapter.isAvailable() else {
-            throw PrinterError(.SDK_NOT_AVAILABLE, "Adapter \(profile.adapter.rawValue) indisponible")
+            throw PrinterError(.SDK_NOT_AVAILABLE, "Adapter \(native.adapter.rawValue) indisponible")
         }
-        try await adapter.connect(profile, timeoutMs: timeoutMs)
-        let connected = adapter.isConnected(printerId)
+        try await adapter.connect(native, timeoutMs: timeoutMs)
+
+        var profile = native
+        if preferSdk && forceAdapter == nil && !native.adapter.isSdk
+            && (native.transport == .bluetooth || native.transport == .ble)
+            && adapter.isConnected(printerId),
+           var sdk = await switchToSdk(native, adapter, timeoutMs: timeoutMs) {
+            if let mm = paperWidthMm {
+                sdk.capabilities.paperWidthMm = mm
+                sdk.capabilities.printableDots = Self.dots(forMm: mm)
+            }
+            profile = sdk
+        }
+        let connected = adapterFor(profile.adapter)?.isConnected(profile.id) ?? false
         // Persiste le profil si on fixe la largeur (pour que printText/printImage la voient)
         // ou si on le définit par défaut. setAsDefault UNIQUEMENT si la connexion a réussi.
         if connected && (setAsDefault || paperWidthMm != nil) {
             store.upsert(profile)
         }
         if connected && setAsDefault {
-            store.setDefault(printerId)
-            Logger.shared.log("connect", "set-default-after-connect", ["id": printerId])
+            store.setDefault(profile.id)
+            Logger.shared.log("connect", "set-default-after-connect", ["id": profile.id])
         }
         // Taille papier best-effort (déduite du modèle remonté), nil si inconnue.
         let paper = connected ? PaperSizeGuess.fromBrandModel(profile.brand, profile.model) : nil
-        return ConnectResult(connected: connected, paper: paper)
+        return ConnectResult(connected: connected, paper: paper, printerId: profile.id, adapter: profile.adapter)
+    }
+
+    /// Imprimante connectée en natif Bluetooth/BLE qu'un SDK de marque sait piloter : on bascule
+    /// sur le SDK (une Star ne comprend pas l'ESC/POS). Best-effort : si le SDK échoue, on
+    /// revient au natif. Miroir de switchToSdk côté Android.
+    private func switchToSdk(_ native: PrinterProfile, _ nativeAdapter: PrinterAdapter, timeoutMs: Int) async -> PrinterProfile? {
+        let sources: Set<String> = ["epson", "star", "brother"]
+        guard adapters.contains(where: { sources.contains($0.id.rawValue) && $0.isAvailable() }) else { return nil }
+        let options = DiscoveryManager.Options(sources: sources, timeoutMs: Self.sdkSwitchDiscoveryMs, networkCidr: nil, tcpPorts: [])
+        let (found, _) = await DiscoveryManager(adapters: adapters).discover(options, emitPartial: { _ in })
+        guard let twin = DiscoveryManager.sdkTwin(address: native.address, name: native.name, in: found),
+              let sdkAdapter = adapterFor(twin.adapter) else { return nil }
+        let sdkProfile = toEphemeralProfile(twin)
+        Logger.shared.log("connect", "sdk-switch", ["from": native.id, "to": twin.id])
+        // Une imprimante Bluetooth/BLE n'accepte qu'une connexion : on libère d'abord le canal natif.
+        await nativeAdapter.disconnect(native.id)
+        try? await Task.sleep(nanoseconds: 500_000_000) // le firmware libère le canal avec un léger retard
+        do {
+            try await sdkAdapter.connect(sdkProfile, timeoutMs: timeoutMs)
+            if sdkAdapter.isConnected(twin.id) {
+                // Rendre le profil SDK résolvable (setDefault / impression) même hors découverte UI.
+                lock.lock(); lastDiscovered = lastDiscovered.filter { $0.id != twin.id } + [twin]; lock.unlock()
+                return sdkProfile
+            }
+        } catch {
+            Logger.shared.error("connect", "sdk-switch-failed \(twin.id): \(error)")
+        }
+        do {
+            try await nativeAdapter.connect(native, timeoutMs: timeoutMs)
+        } catch {
+            Logger.shared.error("connect", "native-restore-failed \(native.id): \(error)")
+        }
+        return nil
     }
 
     func disconnect(_ printerId: String) async {

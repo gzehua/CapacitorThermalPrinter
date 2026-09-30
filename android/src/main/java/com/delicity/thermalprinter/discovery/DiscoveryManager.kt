@@ -186,22 +186,36 @@ class DiscoveryManager(
         return result
     }
 
-    /**
-     * Adresse comparable cross-transport : minuscule, préfixe de cible ePOS2 retiré
-     * (`BT:<mac>`, `TCP:<ip>`…), port retiré pour les IPv4.
-     */
-    private fun bareAddress(a: String): String {
-        val s = a.trim().lowercase().replace(Regex("^(bt|ble|tcps?|usb):"), "")
-        return if (s.contains('.')) s.replace(Regex(":\\d+$"), "") else s
-    }
+    companion object {
+        /**
+         * Entrée SDK de marque (Epson, Star, Brother) désignant la même imprimante physique que
+         * l'imprimante native ([address], [name]) : même adresse, sinon même nom si un seul
+         * candidat le porte (deux imprimantes du même modèle ne doivent pas être confondues).
+         * Zebra exclu : son entrée native est conservée à dessein (cf. collapseSdkDuplicates).
+         */
+        fun sdkTwinOf(address: String, name: String, candidates: List<DiscoveredPrinter>): DiscoveredPrinter? {
+            val brand = candidates.filter { it.adapter.isSdk && it.adapter != AdapterId.ZEBRA }
+            return brand.firstOrNull { sameAddress(it.address, address) }
+                ?: brand.filter { sameName(it.name, name) }.singleOrNull()
+        }
 
-    private fun sameAddress(a: String, b: String): Boolean {
-        val na = bareAddress(a)
-        return na.isNotEmpty() && na == bareAddress(b)
-    }
+        /**
+         * Adresse comparable cross-transport : minuscule, préfixe de cible ePOS2 retiré
+         * (`BT:<mac>`, `TCP:<ip>`…), port retiré pour les IPv4.
+         */
+        private fun bareAddress(a: String): String {
+            val s = a.trim().lowercase().replace(Regex("^(bt|ble|tcps?|usb):"), "")
+            return if (s.contains('.')) s.replace(Regex(":\\d+$"), "") else s
+        }
 
-    private fun sameName(a: String, b: String): Boolean {
-        val na = a.trim().lowercase()
-        return na.isNotEmpty() && na == b.trim().lowercase()
+        private fun sameAddress(a: String, b: String): Boolean {
+            val na = bareAddress(a)
+            return na.isNotEmpty() && na == bareAddress(b)
+        }
+
+        private fun sameName(a: String, b: String): Boolean {
+            val na = a.trim().lowercase()
+            return na.isNotEmpty() && na == b.trim().lowercase()
+        }
     }
 }

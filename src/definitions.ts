@@ -39,6 +39,15 @@ export interface SdkStatus {
   transports: PrinterTransport[];
 }
 
+/** Résultat de `connectPrinter`. */
+export interface ConnectResult {
+  connected: boolean;
+  paper: PaperInfo | null;
+  /** Imprimante réellement connectée (id SDK après une bascule `preferSdk`). */
+  printerId: string;
+  adapter: PrinterAdapterId;
+}
+
 /** Payload de l'event émis pendant un scan quand une imprimante est trouvée. */
 export interface PrinterFoundEvent {
   printer: DiscoveredPrinter;
@@ -95,8 +104,11 @@ export interface ThermalPrinterPlugin {
    * Ouvre explicitement une connexion vers une imprimante connue/découverte.
    * Renvoie aussi la **taille de papier** déduite du modèle (best-effort), ou
    * `paper: null` si elle n'a pas pu être déterminée (à afficher à l'utilisateur).
+   *
+   * `printerId` / `adapter` désignent l'imprimante **réellement connectée** : ils diffèrent
+   * de la demande quand `preferSdk` a basculé une imprimante native vers son SDK fabricant.
    */
-  connectPrinter(options: ConnectOptions): Promise<{ connected: boolean; paper: PaperInfo | null }>;
+  connectPrinter(options: ConnectOptions): Promise<ConnectResult>;
 
   /** Ferme la connexion active (sans supprimer le profil). */
   disconnectPrinter(options: { printerId: string }): Promise<void>;
