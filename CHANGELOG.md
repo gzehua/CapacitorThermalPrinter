@@ -4,6 +4,21 @@ Toutes les modifications notables de ce projet sont documentées ici.
 Le format suit [Keep a Changelog](https://keepachangelog.com/) et
 [SemVer](https://semver.org/lang/fr/).
 
+## [8.5.1]
+
+### Corrigé
+- **Une Star connectée en « Natif Bluetooth » n'imprimait rien.** Une imprimante jamais
+  appairée n'est visible que de la source Bluetooth native : le SDK Star ne liste que les
+  appareils appairés. La connexion native déclenchait l'appairage mais restait en ESC/POS,
+  langage que la Star ne comprend pas ; il fallait relancer une recherche pour voir apparaître
+  l'entrée SDK et s'y reconnecter. `connectPrinter()` bascule désormais seul : après une
+  connexion native Bluetooth/BLE réussie, il lance un court scan des SDK de marque (Epson,
+  Star, Brother — 5 s) et, si l'un reconnaît l'imprimante (même adresse, ou même nom sans
+  ambiguïté), ferme le canal natif et reconnecte via le SDK. Échec du SDK → retour au natif.
+  Nouvelle option `ConnectOptions.preferSdk` (défaut `true`, ignorée avec `forceAdapter`) ;
+  `connectPrinter()` renvoie `printerId` et `adapter` de l'imprimante réellement connectée, et
+  `setAsDefault` s'applique à celle-ci. Android et iOS.
+
 ## [8.5.0]
 
 ### Ajouté
