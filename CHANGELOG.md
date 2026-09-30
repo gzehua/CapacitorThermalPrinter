@@ -23,6 +23,12 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/) et
   sont désormais écartés quand le préfixe MAC est celui d'un autre fabricant (Epson, Star,
   Brother, imprimantes intégrées Sunmi/Landi) ou que le nom est un modèle d'une autre marque
   (`TM-`, `TSP`, `mC-Print`, `SM-`, `PJ-`/`RJ-`/`TD-`/`QL-`/`PT-`, `Inner Printer`).
+- **Star : une interface indisponible ne coupe plus toute la découverte (Android).** Le
+  gestionnaire de découverte StarXpand était créé d'un bloc pour LAN + Bluetooth + BLE + USB ;
+  si le SDK en refusait une (ex. BLE sans service de localisation), la création levait une
+  exception avalée en silence et aucune Star n'était trouvée. Chaque interface est désormais
+  testée à part, seules les disponibles sont utilisées, et les refus sont journalisés
+  (`ThermalPrinter` / `[star]` dans logcat).
 
 ## [8.3.2]
 

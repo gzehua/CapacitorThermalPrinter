@@ -3,6 +3,7 @@ package com.delicity.thermalprinter.adapters
 import android.content.Context
 import android.graphics.Bitmap
 import android.os.Build
+import com.delicity.thermalprinter.Logger
 import com.delicity.thermalprinter.image.TextRasterizer
 import com.delicity.thermalprinter.model.AdapterId
 import com.delicity.thermalprinter.model.DiscoveredPrinter
@@ -73,15 +74,17 @@ class StarAdapter(private val context: Context) : PrinterAdapter {
 
     override suspend fun discover(timeoutMs: Long, onFound: (DiscoveredPrinter) -> Unit) {
         if (!isAvailable()) return
-        val manager = StarDeviceDiscoveryManagerFactory.create(
-            listOf(
-                InterfaceType.Lan,
-                InterfaceType.Bluetooth,
-                InterfaceType.BluetoothLE,
-                InterfaceType.Usb,
-            ),
-            context,
-        )
+        // Le SDK refuse de créer le gestionnaire si UNE interface est indisponible (ex. BLE
+        // sans service de localisation, Bluetooth coupé) : avec les 4 d'un coup, tout Star
+        // partait en silence, Bluetooth et LAN compris. On ne garde que celles acceptées.
+        val interfaces = listOf(InterfaceType.Lan, InterfaceType.Bluetooth, InterfaceType.BluetoothLE, InterfaceType.Usb)
+            .filter { type ->
+                runCatching { StarDeviceDiscoveryManagerFactory.create(listOf(type), context) }
+                    .onFailure { Logger.error("star", "découverte $type indisponible", it) }
+                    .isSuccess
+            }
+        if (interfaces.isEmpty()) return
+        val manager = StarDeviceDiscoveryManagerFactory.create(interfaces, context)
         manager.discoveryTime = timeoutMs.toInt().coerceIn(1000, 30000)
 
         suspendCancellableCoroutine<Unit> { cont ->
@@ -110,7 +113,10 @@ class StarAdapter(private val context: Context) : PrinterAdapter {
             }
             cont.invokeOnCancellation { runCatching { manager.stopDiscovery() } }
             runCatching { manager.startDiscovery() }
-                .onFailure { if (cont.isActive) cont.resume(Unit) }
+                .onFailure {
+                    Logger.error("star", "startDiscovery a échoué", it)
+                    if (cont.isActive) cont.resume(Unit)
+                }
         }
         runCatching { manager.stopDiscovery() }
     }
