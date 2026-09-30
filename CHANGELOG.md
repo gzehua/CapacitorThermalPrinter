@@ -4,7 +4,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 Le format suit [Keep a Changelog](https://keepachangelog.com/) et
 [SemVer](https://semver.org/lang/fr/).
 
-## [Unreleased]
+## [8.4.0]
 
 ### Corrigé
 - **Doublons Epson en Bluetooth (« Epson · Bluetooth » + « Natif Bluetooth », et une ligne
