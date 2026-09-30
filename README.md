@@ -767,7 +767,15 @@ catch (e) {
 - ✅ **MFi manufacturer SDKs** (Epson/Star/Brother/Zebra) for Bluetooth/MFi. ✅📱 **Epson verified
   on iPhone** over Bluetooth (MFi). Requires the brand's MFi protocol string in `Info.plist`.
 - ✅ **Wi-Fi TCP** (port 9100) via `Network.framework` → triggers the **Local Network** prompt.
-- ❌ No USB host for this use case.
+- ✅ **Epson USB (MFi)** via the ePOS2 SDK — only for Epson models certified to connect to an
+  iPhone/iPad over USB (typically the USB-C ones, e.g. TM-m30II/III). Same `com.epson.escpos`
+  protocol string as Bluetooth. A non-MFi USB printer (e.g. TM-T20II over USB-B) is invisible
+  to iOS. ⚠️ Not yet verified on device.
+- ✅ **Star USB (MFi / iAP)** via StarXpand — only for Star models certified for iPhone/iPad USB
+  (check the model spec sheet, e.g. mC-Print3). Same `jp.star-m.starpro` protocol string as Bluetooth.
+  ⚠️ Not yet verified on device.
+- ❌ **Brother, Zebra: no USB on iOS** (their iOS SDKs only offer Wi-Fi and Bluetooth).
+- ❌ No generic USB host (generic ESC/POS over USB is Android only).
 
 > On iOS, for Bluetooth: **BLE (generic) or MFi (brand SDK)** — never generic Classic/SPP.
 > Wi-Fi works for everyone.

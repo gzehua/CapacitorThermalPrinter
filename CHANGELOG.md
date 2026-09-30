@@ -4,6 +4,25 @@ Toutes les modifications notables de ce projet sont documentées ici.
 Le format suit [Keep a Changelog](https://keepachangelog.com/) et
 [SemVer](https://semver.org/lang/fr/).
 
+## [Unreleased]
+
+### Ajouté
+- **Epson USB sur iPhone/iPad.** Le SDK ePOS2 iOS gère l'USB via MFi (ExternalAccessory,
+  protocol string `com.epson.escpos`, déjà requise pour le Bluetooth) : `getCapabilities()`
+  annonce désormais `usb` pour Epson. Réservé aux modèles Epson certifiés pour une connexion
+  USB à un appareil iOS ; non encore vérifié sur device.
+- **Star USB sur iPhone/iPad** : la découverte et la connexion StarXpand géraient déjà
+  l'USB (iAP/MFi), seul `getCapabilities()` ne l'annonçait pas. Brother et Zebra n'ont pas
+  d'USB dans leur SDK iOS.
+
+### Corrigé
+- **Epson iOS : report des correctifs Android de la 8.3.1.**
+  1. `sendData` étant asynchrone, le verdict `onPtrReceive` est maintenant attendu : un job
+     refusé remonte une erreur (`PAPER_EMPTY`, `COVER_OPEN`, `PRINTER_OFFLINE`, `TIMEOUT`…)
+     au lieu d'être annoncé imprimé. Filet de 30 s si l'imprimante ne répond jamais.
+  2. La série ePOS2 n'est plus figée sur TM-m30 : elle est déduite du modèle (accessoire MFi
+     branché, puis modèle/nom du profil), avec le même repli par révision qu'Android.
+
 ## [8.3.1]
 
 ### Corrigé

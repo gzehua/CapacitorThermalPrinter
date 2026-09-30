@@ -365,8 +365,8 @@ final class ThermalPrinterEngine {
         let zebra = adapters.first { $0 is ZebraAdapter }?.isAvailable() ?? false
         return [
             ["adapter": "escpos", "label": "ESC/POS générique", "available": true, "requiresSdk": false, "transports": ["wifi", "ethernet"]],
-            ["adapter": "star", "label": "Star StarXpand", "available": star, "requiresSdk": true, "transports": ["wifi", "bluetooth", "ble"]],
-            ["adapter": "epson", "label": "Epson ePOS2", "available": epson, "requiresSdk": true, "transports": ["wifi", "bluetooth"]],
+            ["adapter": "star", "label": "Star StarXpand", "available": star, "requiresSdk": true, "transports": ["wifi", "bluetooth", "ble", "usb"]],
+            ["adapter": "epson", "label": "Epson ePOS2", "available": epson, "requiresSdk": true, "transports": ["wifi", "bluetooth", "usb"]],
             ["adapter": "brother", "label": "Brother", "available": brother, "requiresSdk": true, "transports": ["wifi", "bluetooth", "ble"]],
             ["adapter": "zebra", "label": "Zebra Link-OS", "available": zebra, "requiresSdk": true, "transports": ["wifi", "bluetooth"]],
             ["adapter": "rawTcp", "label": "TCP brut", "available": true, "requiresSdk": false, "transports": ["wifi", "ethernet"]],
