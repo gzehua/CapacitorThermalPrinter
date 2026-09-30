@@ -26,6 +26,7 @@ import com.delicity.thermalprinter.model.PrinterProfile
 import com.delicity.thermalprinter.model.PrinterStatus
 import com.delicity.thermalprinter.model.RenderOptions
 import com.delicity.thermalprinter.model.Transport
+import com.delicity.thermalprinter.transport.BluetoothSppTransport
 import com.delicity.thermalprinter.store.PrinterStore
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
@@ -162,7 +163,9 @@ class ThermalPrinterEngine(private val context: Context) {
             throw PrinterException(ErrorCode.SDK_NOT_AVAILABLE, "Adapter ${profile.adapter.value} indisponible")
         }
         Logger.log("connect", "connecting", mapOf("id" to printerId, "adapter" to profile.adapter.value))
-        withTimeout(timeoutMs + 1000) { adapter.connect(profile, timeoutMs) }
+        // Bluetooth : une imprimante non appairée attend la pop-up d'appairage avant de se connecter.
+        val pairingBudget = if (profile.transport == Transport.BLUETOOTH) BluetoothSppTransport.PAIRING_TIMEOUT_MS else 0L
+        withTimeout(timeoutMs + 1000 + pairingBudget) { adapter.connect(profile, timeoutMs) }
         val connected = adapter.isConnected(printerId)
         Logger.log("connect", "connected", mapOf("id" to printerId, "ok" to connected))
         // setAsDefault UNIQUEMENT si la connexion a réussi.

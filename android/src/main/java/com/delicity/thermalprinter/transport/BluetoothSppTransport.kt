@@ -45,10 +45,7 @@ class BluetoothSppTransport(
             throw PrinterException(ErrorCode.PRINTER_NOT_FOUND, "MAC invalide: $macAddress", e.message)
         }
 
-        // Si non appairé, l'app doit déclencher l'appairage en amont.
-        if (device.bondState != BluetoothDevice.BOND_BONDED) {
-            throw PrinterException(ErrorCode.PAIRING_REQUIRED, "Appareil non appairé: $macAddress", retryable = false)
-        }
+        if (device.bondState != BluetoothDevice.BOND_BONDED) pair(ad, device)
 
         try {
             ad.cancelDiscovery() // la découverte ralentit/échoue la connexion
@@ -70,6 +67,25 @@ class BluetoothSppTransport(
             } catch (e2: Exception) {
                 throw PrinterException(ErrorCode.CONNECTION_FAILED, "Connexion SPP échouée $macAddress", e2.message, retryable = true)
             }
+        }
+    }
+
+    /**
+     * Appairage à la volée : `createBond()` affiche la pop-up système (PIN / confirmation),
+     * puis on attend l'issue. Une imprimante choisie dans la liste mais jamais appairée
+     * se connecte ainsi du premier coup, sans passer par les Paramètres Android.
+     */
+    private fun pair(ad: BluetoothAdapter, device: BluetoothDevice) {
+        try {
+            ad.cancelDiscovery() // une découverte en cours fait échouer l'appairage
+            if (device.bondState != BluetoothDevice.BOND_BONDING && !device.createBond()) {
+                throw PrinterException(ErrorCode.PAIRING_REQUIRED, "Appairage impossible: $macAddress", retryable = true)
+            }
+        } catch (e: SecurityException) {
+            throw PrinterException(ErrorCode.PERMISSION_DENIED, "Permission BLUETOOTH_CONNECT manquante", e.message)
+        }
+        if (!awaitBonded({ device.bondState }, PAIRING_TIMEOUT_MS)) {
+            throw PrinterException(ErrorCode.PAIRING_REQUIRED, "Appairage refusé ou expiré: $macAddress", retryable = true)
         }
     }
 
@@ -111,5 +127,33 @@ class BluetoothSppTransport(
 
     companion object {
         val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+
+        /** Laisse le temps de lire et saisir le PIN dans la pop-up d'appairage. */
+        const val PAIRING_TIMEOUT_MS = 30_000L
+
+        /**
+         * Attend `BOND_BONDED`. Échec si l'état retombe à `BOND_NONE` après être passé par
+         * `BOND_BONDING` (pop-up annulée, mauvais PIN) ou au bout de [timeoutMs].
+         * Sondage plutôt que BroadcastReceiver : pas besoin de Context dans le transport.
+         */
+        fun awaitBonded(
+            bondState: () -> Int,
+            timeoutMs: Long,
+            pollMs: Long = 200,
+            sleep: (Long) -> Unit = Thread::sleep,
+        ): Boolean {
+            var bonding = false
+            var waited = 0L
+            while (waited <= timeoutMs) {
+                when (bondState()) {
+                    BluetoothDevice.BOND_BONDED -> return true
+                    BluetoothDevice.BOND_BONDING -> bonding = true
+                    BluetoothDevice.BOND_NONE -> if (bonding) return false
+                }
+                sleep(pollMs)
+                waited += pollMs
+            }
+            return false
+        }
     }
 }
