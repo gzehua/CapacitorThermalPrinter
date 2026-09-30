@@ -21,6 +21,12 @@ class SdkTwinTest {
     }
 
     @Test
+    fun `MAC Star sans separateur rapprochee de la MAC native`() {
+        val star = sdk(AdapterId.STAR, "0011622E0816", "TSP100IIIBI")
+        assertEquals(star, DiscoveryManager.sdkTwinOf("00:11:62:2E:08:16", "TSP100-K8672", listOf(star)))
+    }
+
+    @Test
     fun `prefixe de cible ePOS2 ignore`() {
         val epson = sdk(AdapterId.EPSON, "BT:00:01:90:11:22:33", "TM-m30II")
         assertEquals(epson, DiscoveryManager.sdkTwinOf("00:01:90:11:22:33", "TM-m30II_000001", listOf(epson)))

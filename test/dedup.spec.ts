@@ -208,6 +208,17 @@ describe('mergeDiscoveries', () => {
     expect(merged.map((p) => p.adapter)).toEqual(['epson']);
   });
 
+  it('Star en Bluetooth : MAC SDK sans séparateur rapprochée de la MAC native', () => {
+    const merged = mergeDiscoveries(
+      [
+        printer({ id: 'bluetooth:00:11:62:2E:08:16', name: 'TSP100-K8672', transport: 'bluetooth', address: '00:11:62:2E:08:16' }),
+        printer({ id: 'star:Bluetooth:0011622E0816', name: 'TSP100IIIBI', adapter: 'star', transport: 'bluetooth', address: '0011622E0816', isSdk: true }),
+      ],
+      rank,
+    );
+    expect(merged.map((p) => p.adapter)).toEqual(['star']);
+  });
+
   it('garde la Zebra quand aucun SDK de marque ne revendique son adresse', () => {
     const mac = 'AC:3F:A4:00:00:01';
     const merged = mergeDiscoveries(

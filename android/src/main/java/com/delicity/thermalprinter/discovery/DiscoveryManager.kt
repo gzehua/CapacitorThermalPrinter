@@ -205,8 +205,12 @@ class DiscoveryManager(
          */
         private fun bareAddress(a: String): String {
             val s = a.trim().lowercase().replace(Regex("^(bt|ble|tcps?|usb):"), "")
-            return if (s.contains('.')) s.replace(Regex(":\\d+$"), "") else s
+            if (s.contains('.')) return s.replace(Regex(":\\d+$"), "")
+            // MAC : le SDK Star la donne sans séparateur (`0011622E0816`), le natif avec (`00:11:62:…`).
+            return if (MAC.matches(s)) s.replace(Regex("[:-]"), "") else s
         }
+
+        private val MAC = Regex("^[0-9a-f]{2}([:-]?[0-9a-f]{2}){5}$")
 
         private fun sameAddress(a: String, b: String): Boolean {
             val na = bareAddress(a)

@@ -221,7 +221,11 @@ class ThermalPrinterEngine(private val context: Context) {
         if (adapters.none { it.id.value in sources && it.isAvailable() }) return null
         val (found, _) = DiscoveryManager(context, btAdapter, adapters)
             .discover(DiscoveryManager.Options(sources = sources, timeoutMs = SDK_SWITCH_DISCOVERY_MS)) {}
-        val twin = DiscoveryManager.sdkTwinOf(native.address, native.name, found) ?: return null
+        val twin = DiscoveryManager.sdkTwinOf(native.address, native.name, found)
+        if (twin == null) {
+            Logger.log("connect", "sdk-switch-none", mapOf("id" to native.id, "sdk" to found.joinToString { "${it.id}/${it.name}" }))
+            return null
+        }
         val sdkAdapter = adapterFor(twin.adapter) ?: return null
         val sdkProfile = toEphemeralProfile(twin)
         Logger.log("connect", "sdk-switch", mapOf("from" to native.id, "to" to twin.id))

@@ -137,7 +137,9 @@ function collapseSdkDuplicates(list: DiscoveredPrinter[]): DiscoveredPrinter[] {
  */
 function bareAddress(a: string): string {
   const s = a.trim().toLowerCase().replace(/^(bt|ble|tcps?|usb):/, '');
-  return s.includes('.') ? s.replace(/:\d+$/, '') : s;
+  if (s.includes('.')) return s.replace(/:\d+$/, '');
+  // MAC : le SDK Star la donne sans séparateur (`0011622E0816`), le natif avec (`00:11:62:…`).
+  return /^[0-9a-f]{2}([:-]?[0-9a-f]{2}){5}$/.test(s) ? s.replace(/[:-]/g, '') : s;
 }
 
 function sameAddress(a: string, b: string): boolean {

@@ -149,8 +149,12 @@ final class DiscoveryManager {
     private static func bareAddress(_ a: String) -> String {
         let s = a.trimmingCharacters(in: .whitespaces).lowercased()
             .replacingOccurrences(of: "^(bt|ble|tcps?|usb):", with: "", options: .regularExpression)
-        guard s.contains(".") else { return s }
-        return s.replacingOccurrences(of: ":\\d+$", with: "", options: .regularExpression)
+        if s.contains(".") {
+            return s.replacingOccurrences(of: ":\\d+$", with: "", options: .regularExpression)
+        }
+        // MAC : le SDK Star la donne sans séparateur (`0011622E0816`), le natif avec (`00:11:62:…`).
+        guard s.range(of: "^[0-9a-f]{2}([:-]?[0-9a-f]{2}){5}$", options: .regularExpression) != nil else { return s }
+        return s.replacingOccurrences(of: "[:-]", with: "", options: .regularExpression)
     }
 
     private static func sameAddress(_ a: String, _ b: String) -> Bool {

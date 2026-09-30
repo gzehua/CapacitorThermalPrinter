@@ -128,8 +128,11 @@ final class ThermalPrinterEngine {
         guard adapters.contains(where: { sources.contains($0.id.rawValue) && $0.isAvailable() }) else { return nil }
         let options = DiscoveryManager.Options(sources: sources, timeoutMs: Self.sdkSwitchDiscoveryMs, networkCidr: nil, tcpPorts: [])
         let (found, _) = await DiscoveryManager(adapters: adapters).discover(options, emitPartial: { _ in })
-        guard let twin = DiscoveryManager.sdkTwin(address: native.address, name: native.name, in: found),
-              let sdkAdapter = adapterFor(twin.adapter) else { return nil }
+        guard let twin = DiscoveryManager.sdkTwin(address: native.address, name: native.name, in: found) else {
+            Logger.shared.log("connect", "sdk-switch-none", ["id": native.id, "sdk": found.map { "\($0.id)/\($0.name)" }.joined(separator: ", ")])
+            return nil
+        }
+        guard let sdkAdapter = adapterFor(twin.adapter) else { return nil }
         let sdkProfile = toEphemeralProfile(twin)
         Logger.shared.log("connect", "sdk-switch", ["from": native.id, "to": twin.id])
         // Une imprimante Bluetooth/BLE n'accepte qu'une connexion : on libère d'abord le canal natif.
