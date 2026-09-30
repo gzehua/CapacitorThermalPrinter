@@ -4,6 +4,17 @@ Toutes les modifications notables de ce projet sont documentées ici.
 Le format suit [Keep a Changelog](https://keepachangelog.com/) et
 [SemVer](https://semver.org/lang/fr/).
 
+## [8.5.2]
+
+### Corrigé
+- **La bascule SDK de la 8.5.1 ne se déclenchait pas pour une Star, et Star apparaissait en
+  double (natif + SDK) après appairage.** Le SDK Star donne la MAC Bluetooth sans séparateur
+  (`0011622E0816`) alors que le scan natif la donne avec (`00:11:62:2E:08:16`), et les noms
+  diffèrent (`TSP100IIIBI` / `TSP100-K8672`) : aucun rapprochement possible. Les MAC sont
+  désormais comparées sans `:` ni `-` (dédoublonnage de découverte et bascule `preferSdk`).
+  TS, Android et iOS. Journal de diagnostic : `sdk-switch-none` liste les imprimantes SDK
+  vues quand aucune ne correspond.
+
 ## [8.5.1]
 
 ### Corrigé
