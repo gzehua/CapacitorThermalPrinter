@@ -1,5 +1,6 @@
 package com.delicity.thermalprinter.adapters
 
+import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.graphics.Bitmap
 import com.delicity.thermalprinter.Logger
@@ -55,7 +56,11 @@ class ZebraAdapter(private val context: Context) : PrinterAdapter {
                     // versions de SDK), sinon on lit le champ — sans lever.
                     val address = SdkReflect.callOrNull(dp, "getAddress") as? String
                         ?: SdkReflect.field(dp, "address") as? String ?: ""
-                    if (address.isNotEmpty()) {
+                    // Le BluetoothDiscoverer Zebra remonte TOUTE imprimante Bluetooth appairée
+                    // (Epson, Star… compris) : on écarte celles qui ne sont pas des Zebra.
+                    val friendlyName = SdkReflect.field(dp, "friendlyName") as? String
+                        ?: bluetoothName(address)
+                    if (address.isNotEmpty() && !isForeignBluetoothPrinter(address, friendlyName)) {
                         onFound(
                             DiscoveredPrinter(
                                 id = "zebra:$address",
@@ -91,6 +96,13 @@ class ZebraAdapter(private val context: Context) : PrinterAdapter {
             )
         }
     }
+
+    /** Nom Bluetooth système d'une MAC (null si inconnu ou permission BLUETOOTH_CONNECT absente). */
+    private fun bluetoothName(address: String): String? = runCatching {
+        if (!address.matches(MAC_RE)) return null
+        val bt = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+        bt?.getRemoteDevice(address)?.name
+    }.getOrNull()
 
     override fun canHandle(profile: PrinterProfile): Boolean =
         isAvailable() && profile.adapter == AdapterId.ZEBRA
@@ -285,5 +297,38 @@ class ZebraAdapter(private val context: Context) : PrinterAdapter {
         private const val NETWORK_DISCOVERER = "com.zebra.sdk.printer.discovery.NetworkDiscoverer"
         private const val BLUETOOTH_DISCOVERER = "com.zebra.sdk.printer.discovery.BluetoothDiscoverer"
         private const val DISCOVERY_HANDLER = "com.zebra.sdk.printer.discovery.DiscoveryHandler"
+
+        private val MAC_RE = Regex("([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}")
+
+        // Préfixes MAC (OUI) d'autres fabricants d'imprimantes, et MAC fixes des imprimantes
+        // intégrées Sunmi / Landi.
+        private val FOREIGN_MAC_PREFIXES = listOf(
+            "00:01:90", // Seiko Epson
+            "00:11:62", // Star Micronics
+            "00:80:77", // Brother
+            "00:11:22:33:44:55", // Sunmi InnerPrinter
+            "00:01:02:03:0A:0B", // Landi Inner Printer
+        )
+
+        // Noms de modèles d'autres marques (minuscules, sans espaces). Aucun modèle Zebra ne
+        // commence ainsi (ZQ, ZD, ZT, QLn, iMZ, RW, P4T…).
+        private val FOREIGN_NAME_PREFIXES = listOf(
+            "tm-", // Epson TM-m30, TM-T20…
+            "tsp", "mc-print", "mpop", "sm-", // Star
+            "pj-", "rj-", "td-", "ql-", "pt-", // Brother
+            "innerprinter", // Sunmi / Landi
+        )
+
+        /**
+         * Vrai si une imprimante remontée par le BluetoothDiscoverer Zebra est en réalité
+         * d'une autre marque : ce découvreur liste toute imprimante Bluetooth appairée. Sans
+         * ce filtre, une Epson ou une Star apparaissait aussi en « Zebra <MAC> ».
+         */
+        internal fun isForeignBluetoothPrinter(address: String, name: String?): Boolean {
+            val mac = address.trim().uppercase()
+            if (FOREIGN_MAC_PREFIXES.any { mac.startsWith(it) }) return true
+            val n = (name ?: "").lowercase().replace(Regex("\\s+"), "")
+            return FOREIGN_NAME_PREFIXES.any { n.startsWith(it) }
+        }
     }
 }

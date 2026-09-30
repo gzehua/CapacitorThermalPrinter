@@ -17,6 +17,12 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/) et
      positif et disparaît (seul rapprochement SDK↔SDK, par adresse uniquement) ;
   3. le préfixe de cible ePOS2 (`BT:`, `TCP:`, `USB:`) est ignoré pour comparer les adresses.
   Même correctif en TS, Android et iOS.
+- **Faux positifs Zebra en Bluetooth (Android).** Le `BluetoothDiscoverer` du SDK Zebra liste
+  toute imprimante Bluetooth appairée : une Star TSP100 que le SDK Star ne détecte pas
+  apparaissait en « Zebra <MAC> » en plus de sa ligne native. Les résultats Bluetooth Zebra
+  sont désormais écartés quand le préfixe MAC est celui d'un autre fabricant (Epson, Star,
+  Brother, imprimantes intégrées Sunmi/Landi) ou que le nom est un modèle d'une autre marque
+  (`TM-`, `TSP`, `mC-Print`, `SM-`, `PJ-`/`RJ-`/`TD-`/`QL-`/`PT-`, `Inner Printer`).
 
 ## [8.3.2]
 
