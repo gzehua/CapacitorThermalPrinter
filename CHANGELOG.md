@@ -4,6 +4,17 @@ Toutes les modifications notables de ce projet sont documentées ici.
 Le format suit [Keep a Changelog](https://keepachangelog.com/) et
 [SemVer](https://semver.org/lang/fr/).
 
+## [8.5.0]
+
+### Ajouté
+- **Appairage Bluetooth à la volée (Android).** Se connecter à une imprimante Bluetooth
+  (ESC/POS SPP) jamais appairée échouait tout de suite en `PAIRING_REQUIRED`, sans pop-up :
+  il fallait passer par les Paramètres Android. `connectPrinter()` lance désormais
+  `createBond()`, affiche la pop-up système (PIN / confirmation) et attend jusqu'à 30 s avant
+  d'ouvrir le socket. `PAIRING_REQUIRED` (`retryable: true`) ne remonte plus que si
+  l'appairage est refusé, échoue (mauvais PIN) ou expire. Le délai de `connectPrinter()` en
+  Bluetooth inclut ce temps d'appairage.
+
 ## [8.4.0]
 
 ### Corrigé
